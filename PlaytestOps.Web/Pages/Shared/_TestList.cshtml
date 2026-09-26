@@ -1,0 +1,45 @@
+@model PlaytestOps.Web.Pages.TestListViewModel
+@using PlaytestOps.Web.Models
+
+@if (Model.LoadFailed)
+{
+    <div class="empty-state load-error" role="alert">
+        <h2>Tests couldn't be loaded.</h2>
+        <p>The saved test data is temporarily unavailable. Try Refresh tests again.</p>
+    </div>
+}
+else if (Model.Tests.Count == 0)
+{
+    <div class="empty-state">
+        <h2>No tests yet.</h2>
+        <p>There are no saved tests to display. Refresh after tests have been added.</p>
+    </div>
+}
+else
+{
+    <div class="list-heading"><h2>Saved tests</h2><span>@Model.Tests.Count total</span></div>
+    <div class="test-table-wrap">
+        <table class="test-table">
+            <caption class="visually-hidden">Saved playtests with descriptions and current status</caption>
+            <thead><tr><th scope="col">Test</th><th scope="col">Description</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+            @foreach (var test in Model.Tests)
+            {
+                var (label, statusClass) = test.Status switch
+                {
+                    TestStatus.NotStarted => ("Not Started", "not-started"),
+                    TestStatus.Running => ("Running", "running"),
+                    TestStatus.Failed => ("Failed", "failed"),
+                    TestStatus.Passed => ("Passed", "passed"),
+                    _ => ("Unknown", "not-started")
+                };
+                <tr data-test-id="@test.Id">
+                    <th scope="row">@test.Name</th>
+                    <td class="test-description">@test.Description</td>
+                    <td><span class="test-status status-@statusClass"><span aria-hidden="true" class="status-dot"></span>@label</span></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}

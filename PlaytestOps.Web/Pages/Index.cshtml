@@ -1,0 +1,23 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Tests";
+}
+
+<section class="dashboard-heading" aria-labelledby="dashboard-title">
+    <div>
+        <h1 id="dashboard-title">Test View</h1>
+    </div>
+    <form method="get" asp-page="/Index" hx-get="@Url.Page("/Index", "Tests")"
+          hx-target="#test-list" hx-swap="innerHTML" hx-disabled-elt="find button"
+          hx-indicator="#refresh-indicator" hx-request='{"timeout":15000}'>
+        <button class="btn btn-primary refresh-button" type="submit">Refresh tests</button>
+        <span id="refresh-indicator" class="htmx-indicator" role="status">Refreshing…</span>
+    </form>
+</section>
+
+<p id="refresh-error" class="load-error" role="alert" hidden>Couldn't refresh tests. Check your connection and try again. Any results below may be out of date.</p>
+
+<section id="test-list" aria-label="Saved tests" aria-live="polite" aria-busy="false">
+    <partial name="_TestList" model="Model.TestList" />
+</section>
