@@ -17,11 +17,10 @@ else if (Model.Tests.Count == 0)
 }
 else
 {
-    <div class="list-heading"><h2>Saved tests</h2><span>@Model.Tests.Count total</span></div>
     <div class="test-table-wrap">
         <table class="test-table">
             <caption class="visually-hidden">Saved playtests with descriptions and current status</caption>
-            <thead><tr><th scope="col">Test</th><th scope="col">Description</th><th scope="col">Status</th></tr></thead>
+            <thead><tr><th scope="col">Status</th><th scope="col">Name</th><th scope="col">Description</th></tr></thead>
             <tbody>
             @foreach (var test in Model.Tests)
             {
@@ -34,9 +33,9 @@ else
                     _ => ("Unknown", "not-started")
                 };
                 <tr data-test-id="@test.Id">
+                    <td><span class="test-status status-@statusClass">@label</span></td>
                     <th scope="row">@test.Name</th>
                     <td class="test-description">@test.Description</td>
-                    <td><span class="test-status status-@statusClass"><span aria-hidden="true" class="status-dot"></span>@label</span></td>
                 </tr>
             }
             </tbody>

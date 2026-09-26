@@ -18,19 +18,30 @@ h1 { font-size: clamp(1.8rem, 4vw, 2.65rem); letter-spacing: -.045em; }
 .test-table-wrap { border: 1px solid #dce3e8; border-radius: 10px; overflow: hidden; background: #fff; }
 .test-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .test-table thead { background: #f9fafb; }
-.test-table th, .test-table td { padding: 23px 24px; text-align: left; vertical-align: middle; overflow-wrap: anywhere; }
+.test-table th, .test-table td { padding: 23px 24px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .test-table thead th { padding-top: 15px; padding-bottom: 15px; color: #647484; font-size: .73rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
-.test-table th:first-child { width: 30%; }
-.test-table th:last-child { width: 170px; }
+.test-table th:first-child { width: 120px; }
+.test-table th:last-child { width: 60%; }
 .test-table tbody tr { border-top: 1px solid #e8edf0; }
-.test-table tbody th { font-size: .95rem; font-weight: 600; }
+.test-table tbody th { font-size: .95rem; font-weight: 500; }
 .test-description { color: #637181; font-size: .9rem; line-height: 1.7; }
-.test-status { display: inline-flex; align-items: center; gap: 7px; border-radius: 5px; padding: 6px 9px; font-size: .75rem; font-weight: 650; white-space: nowrap; }
-.status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-not-started { background: #edf0f3; color: #536170; }
-.status-running { background: #e7effc; color: #315e9e; }
-.status-failed { background: #fcebe9; color: #a23e37; }
-.status-passed { background: #e5f3ec; color: #267152; }
+.test-status { display: inline-flex; align-items: center; gap: 7px; border-radius: 5px; padding: 1px 9px; font-size: .9rem; font-weight: 600; white-space: nowrap; }
+.status-not-started {
+    background: #000000;
+    color: #FFFFFF;
+}
+.status-running {
+    background: #0080FF;
+    color: #FFFFFF;
+}
+.status-failed {
+    background: #BF0000;
+    color: #FFFFFF;
+}
+.status-passed {
+    background: #00BF00;
+    color: #FFFFFF;
+}
 .refresh-note { color: #667888; font-size: .8rem; margin: 18px 0 52px; }
 .empty-state { padding: 42px 24px; background: #fff; border: 1px solid #dce3e8; border-radius: 10px; }
 .empty-state h2 { font-size: 1.2rem; }
