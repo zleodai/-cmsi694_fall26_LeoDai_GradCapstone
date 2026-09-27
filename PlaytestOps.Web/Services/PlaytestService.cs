@@ -12,6 +12,6 @@ public interface IPlaytestService
 public sealed class PlaytestService(ApplicationDbContext database) : IPlaytestService
 {
     public async Task<IReadOnlyList<Playtest>> GetTestsAsync(CancellationToken cancellationToken) =>
-        await database.Playtests.AsNoTracking().OrderBy(test => test.Id)
+        await database.Playtests.AsNoTracking().Include(test => test.Project).Include(test => test.Runs.OrderByDescending(run => run.RequestedAt).Take(5)).OrderBy(test => test.Id)
             .ToListAsync(cancellationToken);
 }

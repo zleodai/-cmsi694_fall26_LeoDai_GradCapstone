@@ -2,6 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using PlaytestOps.Web.Data;
 using PlaytestOps.Web.Services;
 using Microsoft.Data.Sqlite;
+using PlaytestOps.Web.Bridge;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +23,17 @@ builder.Services.AddScoped<IPlaytestService, PlaytestService>();
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddRazorPages();
+builder.Services.AddSingleton<BridgeRegistry>();
+builder.Services.AddScoped<CatalogService>();
+builder.Services.AddScoped<RunService>();
+builder.Services.AddSingleton<RunMonitor>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<RunMonitor>());
+builder.Services.AddRateLimiter(options => {
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("pair", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 
 var app = builder.Build();
 
@@ -36,11 +51,16 @@ else
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// Local Editor clients can use loopback HTTP without trusting a development certificate.
+app.UseWhen(context => !(context.Request.Path.StartsWithSegments("/api/editor") &&
+    context.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip)), branch => branch.UseHttpsRedirection());
 
 app.UseRouting();
 
 app.UseAuthorization();
+app.UseRateLimiter();
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(20) });
+app.MapEditorBridge();
 
 app.MapStaticAssets();
 app.MapRazorPages()

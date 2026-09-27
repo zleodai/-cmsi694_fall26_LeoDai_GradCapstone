@@ -1,0 +1,34 @@
+@page
+@model PlaytestOps.Web.Pages.EditorsModel
+@{ ViewData["Title"] = "Unity Editors"; }
+<h1>Unity Editors</h1>
+<p><a asp-page="/Index">View tests</a> · <a asp-page="/Editors">Refresh connections</a></p>
+<p>Generate a code here, then enter this dashboard's address and the code in Unity's PlaytestOps window.</p>
+@if (Model.CanPair)
+{
+    <form method="post" asp-page-handler="PairingCode">
+        <button type="submit" class="btn btn-primary">Generate pairing code</button>
+    </form>
+}
+else
+{
+    <p>Open this page through localhost on the server machine to generate a pairing code.</p>
+}
+@if (Model.PairingCode is not null)
+{
+    <div class="empty-state mt-3" role="status">
+        <h2>Pairing code: <code id="pairing-code">@Model.PairingCode</code></h2>
+        <p>Single use. Expires at @Model.ExpiresAt?.ToString("HH:mm:ss 'UTC'").</p>
+    </div>
+}
+<h2 class="mt-4">Paired Editors</h2>
+@if (Model.Sessions.Count == 0) { <p>No paired Editors yet.</p> }
+@foreach (var session in Model.Sessions)
+{
+    <article class="empty-state mb-3">
+        <h3>@session.ProjectName</h3>
+        <p><strong>@(session.Connected ? "Connected" : "Disconnected")</strong> · Unity @session.UnityVersion</p>
+        <p>Project: <code>@session.ProjectId</code></p>
+    </article>
+}
+<p>Test discovery synchronizes saved tests. Use Run test on the dashboard, then refresh to view progress and results. Server restarts require pairing again.</p>

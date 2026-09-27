@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PlaytestOps.Web.Data;
 
@@ -10,9 +11,11 @@ using PlaytestOps.Web.Data;
 namespace PlaytestOps.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260927084849_RemoveDemoPlaytests")]
+    partial class RemoveDemoPlaytests
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -265,67 +268,6 @@ namespace PlaytestOps.Web.Data.Migrations
                         });
                 });
 
-            modelBuilder.Entity("PlaytestOps.Web.Models.PlaytestRun", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT");
-
-                    b.Property<double>("DurationSeconds")
-                        .HasColumnType("REAL");
-
-                    b.Property<DateTime?>("FinishedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Outcome")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Output")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("PlaytestId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("RequestedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Sequence")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("SessionId")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("StackTrace")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SessionId")
-                        .IsUnique()
-                        .HasFilter("State IN ('Pending', 'Running')");
-
-                    b.HasIndex("PlaytestId", "RequestedAt");
-
-                    b.ToTable("PlaytestRuns", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_PlaytestRuns_State", "State IN ('Pending', 'Running', 'Passed', 'Failed')");
-                        });
-                });
-
             modelBuilder.Entity("PlaytestOps.Web.Models.UnityProject", b =>
                 {
                     b.Property<string>("Id")
@@ -406,22 +348,6 @@ namespace PlaytestOps.Web.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Project");
-                });
-
-            modelBuilder.Entity("PlaytestOps.Web.Models.PlaytestRun", b =>
-                {
-                    b.HasOne("PlaytestOps.Web.Models.Playtest", "Playtest")
-                        .WithMany("Runs")
-                        .HasForeignKey("PlaytestId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Playtest");
-                });
-
-            modelBuilder.Entity("PlaytestOps.Web.Models.Playtest", b =>
-                {
-                    b.Navigation("Runs");
                 });
 #pragma warning restore 612, 618
         }

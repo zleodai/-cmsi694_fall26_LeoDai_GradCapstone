@@ -1,6 +1,7 @@
 @model PlaytestOps.Web.Pages.TestListViewModel
 @using PlaytestOps.Web.Models
 
+@if (Model.Notice is not null) { <p role="status" class="run-notice">@Model.Notice</p> }
 @if (Model.LoadFailed)
 {
     <div class="empty-state load-error" role="alert">
@@ -32,10 +33,50 @@ else
                     TestStatus.Passed => ("Passed", "passed"),
                     _ => ("Unknown", "not-started")
                 };
+                var latest = test.Runs.OrderByDescending(x => x.RequestedAt).FirstOrDefault();
+                var projectBusy = Model.Tests.Any(x => x.ProjectId == test.ProjectId && x.Runs.Any(r => r.State is "Pending" or "Running"));
+                var canRun = Model.CanRun && test.ProjectId is not null && Model.ConnectedProjects?.Contains(test.ProjectId) == true && test.IsAvailable && (test.RunState is "Runnable" or "Explicit") && !projectBusy;
+                if (latest?.State == "Pending") { label = "Requested"; statusClass = "running"; }
                 <tr data-test-id="@test.Id">
                     <td><span class="test-status status-@statusClass">@label</span></td>
-                    <th scope="row">@test.Name</th>
-                    <td class="test-description">@test.Description</td>
+                    <th scope="row">@test.Name
+                        <small class="d-block fw-normal">@(test.Project is null ? "Placeholder" : $"{test.Project.Name} · {test.Mode}")</small>
+                        @if (!test.IsAvailable) { <small class="d-block">Not in the latest discovery</small> }
+                        @if (test.RunState is not null && test.RunState != "Runnable") { <small class="d-block">@test.RunState</small> }
+                    </th>
+                    <td class="test-description">
+                        <p>@test.Description</p>
+                        <form method="post" asp-page="/Index" asp-page-handler="Run" hx-post="@Url.Page("/Index", "Run")"
+                              hx-target="#test-list" hx-swap="innerHTML" hx-disabled-elt="find button" hx-request='{"timeout":15000}'>
+                            <input type="hidden" name="testId" value="@test.Id" />
+                            <button class="btn btn-primary btn-sm" type="submit" disabled="@(!canRun)" aria-label="Run @test.Name (@test.Mode)">Run test</button>
+                            <small>@(projectBusy ? "Editor has an active request." : !Model.CanRun ? "Run from the server machine for now." : Model.ConnectedProjects?.Contains(test.ProjectId ?? "") != true ? "Connect Unity to run." : !test.IsAvailable ? "Refresh discovery in Unity." : "")</small>
+                        </form>
+                        @if (latest is not null)
+                        {
+                            <details class="run-results">
+                                <summary>Latest result: @latest.State · @latest.DurationSeconds.ToString("F3")s</summary>
+                                <p>Requested @latest.RequestedAt.ToString("u") · Outcome: @(string.IsNullOrEmpty(latest.Outcome) ? "Awaiting Unity" : latest.Outcome)</p>
+                                @if (latest.StartedAt is not null) { <p>Started @latest.StartedAt.Value.ToString("u")</p> }
+                                @if (latest.FinishedAt is not null) { <p>Finished @latest.FinishedAt.Value.ToString("u")</p> }
+                                @if (!string.IsNullOrEmpty(latest.Message)) { <h3>Result / error</h3><pre>@latest.Message</pre> }
+                                @if (!string.IsNullOrEmpty(latest.StackTrace)) { <h3>Stack trace</h3><pre>@latest.StackTrace</pre> }
+                                @if (!string.IsNullOrEmpty(latest.Output)) { <h3>Test output</h3><pre>@latest.Output</pre> }
+                                <small>Run ID: @latest.Id</small>
+                                @if (test.Runs.Count > 1)
+                                {
+                                    <h3>Previous attempts</h3>
+                                    @foreach (var attempt in test.Runs.OrderByDescending(x => x.RequestedAt).Skip(1))
+                                    {
+                                        <details><summary>@attempt.RequestedAt.ToString("u") · @attempt.State · @attempt.DurationSeconds.ToString("F3")s</summary>
+                                            <p>Outcome: @attempt.Outcome · Run ID: @attempt.Id</p>
+                                            <pre>@attempt.Message</pre><pre>@attempt.StackTrace</pre><pre>@attempt.Output</pre>
+                                        </details>
+                                    }
+                                }
+                            </details>
+                        }
+                    </td>
                 </tr>
             }
             </tbody>

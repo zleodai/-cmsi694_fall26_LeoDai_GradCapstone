@@ -7,6 +7,7 @@
 <section class="dashboard-heading" aria-labelledby="dashboard-title">
     <div>
         <h1 id="dashboard-title">Test View</h1>
+        <p><a asp-page="/Editors">Connect a Unity Editor</a></p>
     </div>
     <form method="get" asp-page="/Index" hx-get="@Url.Page("/Index", "Tests")"
           hx-target="#test-list" hx-swap="innerHTML" hx-disabled-elt="find button"
@@ -16,6 +17,7 @@
     </form>
 </section>
 
+<p class="refresh-note">Run a selected test, then refresh to see its progress and results. The latest five attempts are shown; all attempts are saved.</p>
 <p id="refresh-error" class="load-error" role="alert" hidden>Couldn't refresh tests. Check your connection and try again. Any results below may be out of date.</p>
 
 <section id="test-list" aria-label="Saved tests" aria-live="polite" aria-busy="false">
