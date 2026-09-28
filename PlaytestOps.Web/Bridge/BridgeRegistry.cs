@@ -16,6 +16,9 @@ public sealed class EditorSession
     public required string UnityVersion { get; init; }
     public required DateTimeOffset ExpiresAt { get; init; }
     public WebSocket? Socket { get; set; }
+    // Accessed only while CatalogGate is held; reset when a socket attaches.
+    public string? RunProbeId { get; set; }
+    public bool RunReady { get; set; }
     public SemaphoreSlim SendGate { get; } = new(1, 1);
     public DateTimeOffset? LastConnectedAt { get; set; }
 }
@@ -88,6 +91,8 @@ public sealed class BridgeRegistry
             // A restored domain can reconnect before the server notices the old socket died.
             session.Socket?.Abort();
             session.Socket = socket;
+            session.RunProbeId = null;
+            session.RunReady = false;
             session.LastConnectedAt = DateTimeOffset.UtcNow;
             return true;
         }
@@ -125,6 +130,11 @@ public sealed class BridgeRegistry
     public EditorSession? ConnectedProject(string projectId)
     {
         lock (gate) { Prune(); return sessions.Values.FirstOrDefault(x => x.ProjectId == projectId && x.Socket?.State == WebSocketState.Open); }
+    }
+
+    public EditorSession? ProjectSession(string projectId)
+    {
+        lock (gate) { Prune(); return sessions.Values.FirstOrDefault(x => x.ProjectId == projectId); }
     }
 
     public bool IsConnected(string sessionId)

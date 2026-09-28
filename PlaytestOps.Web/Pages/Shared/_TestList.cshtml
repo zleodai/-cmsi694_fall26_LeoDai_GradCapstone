@@ -1,6 +1,18 @@
 @model PlaytestOps.Web.Pages.TestListViewModel
 @using PlaytestOps.Web.Models
 
+@{
+    var queuedCount = Model.Tests.Sum(test => test.Runs.Count(run => run.State == "Queued"));
+    var activeCount = Model.Tests.Sum(test => test.Runs.Count(run => run.State is "Pending" or "Running"));
+}
+@if (!Model.LoadFailed && queuedCount + activeCount > 0)
+{
+    <div class="queue-summary" role="status" hx-get="@Url.Page("/Index", "Tests")" hx-trigger="every 3s"
+         hx-target="#test-list" hx-swap="innerHTML" hx-sync="#test-list:drop" hx-disabled-elt="#test-list form button:not([disabled]), .refresh-button:not([disabled])" hx-request='{"timeout":15000}'>
+        <strong>@queuedCount queued · @activeCount starting / running</strong>
+        <span>Positions are per Unity project. #1 is next. Progress updates while work is active.</span>
+    </div>
+}
 @if (Model.Notice is not null) { <p role="status" class="run-notice">@Model.Notice</p> }
 @if (Model.LoadFailed)
 {
@@ -34,9 +46,10 @@ else
                     _ => ("Unknown", "not-started")
                 };
                 var latest = test.Runs.OrderByDescending(x => x.RequestedAt).FirstOrDefault();
-                var projectBusy = Model.Tests.Any(x => x.ProjectId == test.ProjectId && x.Runs.Any(r => r.State is "Pending" or "Running"));
-                var canRun = Model.CanRun && test.ProjectId is not null && Model.ConnectedProjects?.Contains(test.ProjectId) == true && test.IsAvailable && (test.RunState is "Runnable" or "Explicit") && !projectBusy;
-                if (latest?.State == "Pending") { label = "Requested"; statusClass = "running"; }
+                var testBusy = latest?.State is "Queued" or "Pending" or "Running";
+                var canRun = Model.CanRun && test.ProjectId is not null && Model.PairedProjects?.Contains(test.ProjectId) == true && test.IsAvailable && (test.RunState is "Runnable" or "Explicit") && !testBusy;
+                if (latest?.State == "Pending") { label = "Starting"; statusClass = "running"; }
+                if (latest?.State == "Queued") { label = $"Queued #{latest.QueuePosition}"; statusClass = "queued"; }
                 <tr data-test-id="@test.Id">
                     <td><span class="test-status status-@statusClass">@label</span></td>
                     <th scope="row">@test.Name
@@ -47,15 +60,15 @@ else
                     <td class="test-description">
                         <p>@test.Description</p>
                         <form method="post" asp-page="/Index" asp-page-handler="Run" hx-post="@Url.Page("/Index", "Run")"
-                              hx-target="#test-list" hx-swap="innerHTML" hx-disabled-elt="find button" hx-request='{"timeout":15000}'>
+                              hx-target="#test-list" hx-swap="innerHTML" hx-sync="#test-list:drop" hx-disabled-elt="#test-list form button:not([disabled]), .refresh-button:not([disabled])" hx-request='{"timeout":15000}'>
                             <input type="hidden" name="testId" value="@test.Id" />
-                            <button class="btn btn-primary btn-sm" type="submit" disabled="@(!canRun)" aria-label="Run @test.Name (@test.Mode)">Run test</button>
-                            <small>@(projectBusy ? "Editor has an active request." : !Model.CanRun ? "Run from the server machine for now." : Model.ConnectedProjects?.Contains(test.ProjectId ?? "") != true ? "Connect Unity to run." : !test.IsAvailable ? "Refresh discovery in Unity." : "")</small>
+                            <button class="btn btn-primary btn-sm" type="submit" disabled="@(!canRun)" aria-label="Queue @test.Name (@test.Mode)">@(testBusy ? "Already queued / running" : "Queue test")</button>
+                            <small>@(testBusy ? (latest?.State == "Queued" ? $"Position {latest.QueuePosition} in this project’s queue." : "This test is starting or running.") : !Model.CanRun ? "Run from the server machine for now." : Model.PairedProjects?.Contains(test.ProjectId ?? "") != true ? "Connect Unity to run." : !test.IsAvailable ? "Refresh discovery in Unity." : "")</small>
                         </form>
                         @if (latest is not null)
                         {
                             <details class="run-results">
-                                <summary>Latest result: @latest.State · @latest.DurationSeconds.ToString("F3")s</summary>
+                                <summary>Latest attempt: @latest.State · @latest.DurationSeconds.ToString("F3")s</summary>
                                 <p>Requested @latest.RequestedAt.ToString("u") · Outcome: @(string.IsNullOrEmpty(latest.Outcome) ? "Awaiting Unity" : latest.Outcome)</p>
                                 @if (latest.StartedAt is not null) { <p>Started @latest.StartedAt.Value.ToString("u")</p> }
                                 @if (latest.FinishedAt is not null) { <p>Finished @latest.FinishedAt.Value.ToString("u")</p> }

@@ -30,7 +30,7 @@ public static class BridgeEndpoints
         app.MapGet("/api/editor/connect", HandleSocket);
     }
 
-    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers)
+    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor)
     {
         var session = registry.Authenticate(context);
         if (session is null) { context.Response.StatusCode = 401; return; }
@@ -38,22 +38,45 @@ public static class BridgeEndpoints
         if (context.Request.Headers.ContainsKey("Origin")) { context.Response.StatusCode = 403; return; }
         if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
-        if (!registry.Attach(session, socket)) { socket.Abort(); return; }
+        await registry.CatalogGate.WaitAsync(context.RequestAborted);
+        try
+        {
+            if (!registry.Attach(session, socket)) { socket.Abort(); return; }
+            await registry.SendAsync(session, socket, new { type = "session.ready", sessionId = session.Id, projectId = session.ProjectId, expiresAt = session.ExpiresAt }, context.RequestAborted);
+        }
+        finally { registry.CatalogGate.Release(); }
+        monitor.Wake();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         deadline.CancelAfter(session.ExpiresAt - DateTimeOffset.UtcNow);
         var ct = deadline.Token;
         try
         {
-            await registry.SendAsync(session, socket, new { type = "session.ready", sessionId = session.Id, projectId = session.ProjectId, expiresAt = session.ExpiresAt }, ct);
             while (socket.State == WebSocketState.Open)
             {
                 var payload = await Receive(socket, ct);
                 if (payload is null) break;
                 if (!registry.IsCurrent(session, socket)) break;
-                // Route only the two supported message types, never execute arbitrary Editor methods.
+                // Route supported messages only; never execute arbitrary Editor methods.
                 try
                 {
                     using var document = JsonDocument.Parse(payload);
+                    if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                        document.RootElement.TryGetProperty("type", out var messageType) && messageType.ValueKind == JsonValueKind.String && messageType.GetString() == "run.ready")
+                    {
+                        var requestId = document.RootElement.TryGetProperty("requestId", out var probe) && probe.ValueKind == JsonValueKind.String ? probe.GetString() : null;
+                        await registry.CatalogGate.WaitAsync(ct);
+                        try
+                        {
+                            if (!registry.IsCurrent(session, socket)) break;
+                            if (requestId is not null && requestId == session.RunProbeId)
+                            {
+                                session.RunReady = true;
+                                monitor.Wake();
+                            }
+                        }
+                        finally { registry.CatalogGate.Release(); }
+                        continue;
+                    }
                     if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.String && kind.GetString() == "run.update")
                     {
                         var update = JsonSerializer.Deserialize<RunUpdate>(payload, Json)!;

@@ -7,8 +7,11 @@ public sealed class PlaytestRun
     public int PlaytestId { get; set; }
     public Playtest Playtest { get; set; } = null!;
     public string SessionId { get; set; } = "";
-    public string State { get; set; } = "Pending";
+    public string State { get; set; } = "Queued";
     public DateTime RequestedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DispatchedAt { get; set; }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public int? QueuePosition { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public double DurationSeconds { get; set; }

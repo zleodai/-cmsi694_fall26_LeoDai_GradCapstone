@@ -104,10 +104,17 @@ try
         type = "run.update", runId, sequence, state, outcome, durationSeconds = 1.25, message, stackTrace = "at Checks.One()", output = "<script>alert('test')</script>" };
     Check((await Run(id, "invalid")).StatusCode == HttpStatusCode.BadRequest, "run form requires valid antiforgery token");
     await Run(id);
-    var command = await Receive(socket);
+    async Task<JsonElement> NextCommand(ClientWebSocket target)
+    {
+        var probe = await Receive(target);
+        Check(probe.GetProperty("type").GetString() == "run.probe", "dispatch asks Unity to confirm readiness");
+        await target.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(new { type = "run.ready", requestId = probe.GetProperty("requestId").GetString() })), WebSocketMessageType.Text, true, CancellationToken.None);
+        return await Receive(target);
+    }
+    var command = await NextCommand(socket);
     var runId = command.GetProperty("runId").GetString()!;
     Check(command.GetProperty("type").GetString() == "run.request" && command.GetProperty("uniqueName").GetString() == "Checks/One", "run request selects one exact case");
-    Check((await (await Run(id)).Content.ReadAsStringAsync()).Contains("already has"), "duplicate request rejected while project busy");
+    Check((await (await Run(id)).Content.ReadAsStringAsync()).Contains("already queued or running"), "duplicate queued/running test request rejected");
     Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns") == 1, "busy request does not create another attempt");
     Check((await Send(socket, Update(Guid.NewGuid().ToString("N"), 1, "Passed", "Passed"))).GetProperty("type").GetString() == "error", "unknown run result rejected");
     var otherCodePage = await client.PostAsync("/Editors?handler=PairingCode", new FormUrlEncodedContent(new Dictionary<string,string>{{"__RequestVerificationToken", anti}}));
@@ -131,7 +138,7 @@ try
     }
     Check((await Send(socket, Update(runId, 1, "Running"))).GetProperty("type").GetString() == "run.accepted", "running event acknowledged");
     Check(Scalar("SELECT Status FROM Playtests WHERE Id=" + id) == 1, "Running persists to SQLite");
-    Check((await client.GetStringAsync("/")).Contains("Latest result: Running"), "dashboard renders active run");
+    Check((await client.GetStringAsync("/")).Contains("Latest attempt: Running"), "dashboard renders active run");
     Check((await Send(socket, Update(runId, 2, "Passed", "Failed"))).GetProperty("type").GetString() == "error", "contradictory Passed outcome rejected");
     await Send(socket, Update(runId, 3, "Passed", "Passed", "Success"));
     Check(Scalar("SELECT Status FROM Playtests WHERE Id=" + id) == 3, "Passed result persists");
@@ -141,7 +148,7 @@ try
     html = await client.GetStringAsync("/");
     Check(html.Contains("&lt;script&gt;") && !html.Contains("<script>alert('test')</script>"), "test output is HTML encoded");
     await Run(id);
-    runId = (await Receive(socket)).GetProperty("runId").GetString()!;
+    runId = (await NextCommand(socket)).GetProperty("runId").GetString()!;
     await Send(socket, Update(runId, 1, "Failed", "Failed", "Expected 1 but was 0"));
     Check(Scalar("SELECT Status FROM Playtests WHERE Id=" + id) == 2 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Passed'") == 1,
         "failed retry preserves previous passing attempt");
@@ -150,12 +157,12 @@ try
     await Send(socket, Catalog(cases));
     Check(Scalar("SELECT Status FROM Playtests WHERE Id=" + id) == 2, "discovery preserves remote result status");
     await Run(id);
-    runId = (await Receive(socket)).GetProperty("runId").GetString()!;
-    Scalar("UPDATE PlaytestRuns SET RequestedAt='2000-01-01' WHERE Id='" + runId + "'; SELECT 1;");
+    runId = (await NextCommand(socket)).GetProperty("runId").GetString()!;
+    Scalar("UPDATE PlaytestRuns SET DispatchedAt='2000-01-01' WHERE Id='" + runId + "'; SELECT 1;");
     for (var wait = 0; wait < 30 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Pending'") > 0; wait++) await Task.Delay(100);
     Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE Outcome='TimedOut'") == 1, "unacknowledged request times out without replay");
     await Run(id);
-    runId = (await Receive(socket)).GetProperty("runId").GetString()!;
+    runId = (await NextCommand(socket)).GetProperty("runId").GetString()!;
     await Send(socket, Update(runId, 1, "Running"));
     using var resumedSocket = new ClientWebSocket();
     resumedSocket.Options.SetRequestHeader("Authorization", "Bearer " + credential);
@@ -164,16 +171,72 @@ try
     await Receive(resumedSocket);
     socket = resumedSocket;
     Check((await Send(socket, Update(runId, 2, "Passed", "Passed"))).GetProperty("type").GetString() == "run.accepted", "reconnected Editor can complete its active run");
+    // Hold the readiness reply to exercise queue order and prove no eager dispatch.
+    var secondId = Scalar("SELECT Id FROM Playtests WHERE UniqueName='Checks/Two'");
+    var queuedPage = await (await Run(id)).Content.ReadAsStringAsync();
+    Check(queuedPage.Contains("Added to queue") && queuedPage.Contains("Queued #1"), "enqueue response announces position one");
+    var queueProbe = await Receive(socket);
+    Check(queueProbe.GetProperty("type").GetString() == "run.probe", "queued run waits on a readiness probe");
+    queuedPage = await (await Run(secondId)).Content.ReadAsStringAsync();
+    Check(queuedPage.Contains("Queued #2") && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 2, "distinct test queues behind the first with position two");
+    var beforeDuplicate = Scalar("SELECT COUNT(*) FROM PlaytestRuns");
+    await Task.WhenAll(Run(secondId), Run(secondId));
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns") == beforeDuplicate, "concurrent duplicate clicks create no duplicate attempts");
+    var queuedRunId = "";
+    using (var sql = new SqliteConnection("Data Source=" + db))
+    {
+        sql.Open(); using var select = sql.CreateCommand(); select.CommandText = "SELECT Id FROM PlaytestRuns WHERE State='Queued' AND PlaytestId=" + secondId;
+        queuedRunId = (string)select.ExecuteScalar()!;
+    }
+    Check((await Send(socket, Update(queuedRunId, 1, "Passed", "Passed"))).GetProperty("type").GetString() == "error", "undispatched queued attempts cannot accept run results");
+    Scalar("UPDATE PlaytestRuns SET RequestedAt='2000-01-01' WHERE State='Queued' AND PlaytestId=" + id + "; SELECT 1;");
+    await socket.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(new { type = "run.ready", requestId = Guid.NewGuid().ToString("N") })), WebSocketMessageType.Text, true, CancellationToken.None);
+    await Task.Delay(2200);
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 2, "stale readiness is ignored and queue wait does not consume execution timeout");
+    await socket.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(new { type = "run.ready", requestId = queueProbe.GetProperty("requestId").GetString() })), WebSocketMessageType.Text, true, CancellationToken.None);
+    var firstQueued = await Receive(socket);
+    Check(firstQueued.GetProperty("uniqueName").GetString() == "Checks/One", "FIFO dispatches the oldest queued test first");
+    var firstQueuedId = firstQueued.GetProperty("runId").GetString()!;
+    await Send(socket, Update(firstQueuedId, 1, "Running"));
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Running'") == 1 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 1, "one run executes while another waits");
+    Check((await client.GetStringAsync("/")).Contains("Queued #1"), "waiting position advances after dispatch");
+    await Send(socket, Update(firstQueuedId, 2, "Failed", "Failed", "Intentional queue check"));
+    var nextProbe = await Receive(socket);
+    Check(nextProbe.GetProperty("type").GetString() == "run.probe" && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 1, "failure advances queue but waits for fresh Unity readiness");
+    // Replace the socket while waiting: an old probe must not authorize execution.
+    using var queueSocket = new ClientWebSocket(); queueSocket.Options.SetRequestHeader("Authorization", "Bearer " + credential);
+    socket.Abort();
+    await queueSocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
+    Check((await Receive(queueSocket)).GetProperty("type").GetString() == "session.ready", "reconnection always sends the handshake before queue messages");
+    socket = queueSocket;
+    var freshProbe = await Receive(socket);
+    await socket.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(new { type = "run.ready", requestId = nextProbe.GetProperty("requestId").GetString() })), WebSocketMessageType.Text, true, CancellationToken.None);
+    await Task.Delay(2200);
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 1, "reconnection invalidates the previous socket readiness");
+    await socket.SendAsync(new ArraySegment<byte>(JsonSerializer.SerializeToUtf8Bytes(new { type = "run.ready", requestId = freshProbe.GetProperty("requestId").GetString() })), WebSocketMessageType.Text, true, CancellationToken.None);
+    var secondQueued = await Receive(socket);
+    Check(secondQueued.GetProperty("runId").GetString() == queuedRunId, "reconnection preserves the queued attempt without duplication");
+    await Send(socket, Update(queuedRunId, 1, "Passed", "Passed"));
+    Check(!(await client.GetStringAsync("/")).Contains("hx-trigger=\"every 3s\""), "dashboard polling stops when queue drains");
+    // Missing tests are skipped without sending an execution request.
+    await Run(secondId);
+    await Receive(socket); // hold readiness, then remove this case from discovery
+    await Send(socket, Catalog(new[] { cases[0] }));
+    for (var wait = 0; wait < 40 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") > 0; wait++) await Task.Delay(100);
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE Outcome='Unavailable'") == 1, "unavailable queued tests fail clearly without execution");
+    await Send(socket, Catalog(cases));
     await Run(id);
-    runId = (await Receive(socket)).GetProperty("runId").GetString()!;
+    runId = (await NextCommand(socket)).GetProperty("runId").GetString()!;
     await Send(socket, Update(runId, 1, "Running"));
+    await Run(secondId);
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State='Queued'") == 1, "queue accepts another test while Unity is running");
     using var disconnect = new HttpRequestMessage(HttpMethod.Delete, "/api/editor/session"); disconnect.Headers.Authorization = new("Bearer", credential);
     Check((await client.SendAsync(disconnect)).StatusCode == HttpStatusCode.NoContent, "disconnect revokes session");
     using var revoked = new HttpRequestMessage(HttpMethod.Get, "/api/editor/connect"); revoked.Headers.Authorization = new("Bearer", credential);
     Check((await client.SendAsync(revoked)).StatusCode == HttpStatusCode.Unauthorized, "revoked credentials cannot reconnect");
     Check(WebUtility.HtmlDecode(await (await Run(id)).Content.ReadAsStringAsync()).Contains("Connect the project's Unity Editor"), "offline run request is rejected");
     Stop(); await Start();
-    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State IN ('Pending','Running')") == 0 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE Outcome='Interrupted'") == 1,
+    Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State IN ('Queued','Pending','Running')") == 0 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE Outcome='Interrupted'") >= 2,
         "server restart closes interrupted runs and preserves history");
     Check(Scalar("SELECT COUNT(*) FROM Playtests") == 2 && (await client.GetStringAsync("/")).Contains("Connection checks"), "database survives server restart without reseeding");
     Check((await client.GetStringAsync("/Editors")).Contains("No paired Editors yet."), "server restart clears ephemeral pairing sessions");

@@ -36,7 +36,7 @@ Empty discovery usually means no discoverable test assemblies exist. Use Package
 
 ## Lifetime and resource usage
 
-- When disconnected and idle there is no polling, Update subscription, reconnect loop, socket, or automatic discovery. Settings restoration uses a temporary update hook only while cleanup is pending. Connected sockets use a 30-second keepalive; connection loss triggers bounded retries. Discovery runs on connection and explicit refresh, not on a timer.
+- When disconnected and idle there is no polling, Update subscription, reconnect loop, socket, or automatic discovery. Settings restoration and queue readiness use temporary update hooks only while cleanup or a server probe is pending. Connected sockets use a 30-second keepalive; connection loss triggers bounded retries. Discovery runs on connection and explicit refresh, not on a timer.
 - Closing the window does not disconnect or stop execution. Use Disconnect to stop networking. Session state and callback registration survive domain reloads, including entering/exiting Play Mode.
 - Runs are started only by an explicit action. This package never resumes or retries execution automatically.
 - JSON journal entries are replaced atomically. Final NUnit XML is saved alongside them. Reports can contain project/test output. Dashboard-owned runs upload bounded result text; JSON/XML files stay local.
@@ -49,7 +49,7 @@ Empty discovery usually means no discoverable test assemblies exist. Use Package
 - XML may contain suite/fixture setup failures in addition to the selected leaf. Interrupted execution is recorded separately from an assertion failure. Skipped/inconclusive/raw outcomes are preserved, not converted into a pass.
 - Other Unity versions, GPU tests, and real 1HourRoguelike gameplay behavior need their own validation. A successful package smoke test is not gameplay verification.
 
-Dashboard **Run test** requests execute exactly one case. Running and final results (outcome, duration, message, stack trace, output) return over the existing authenticated socket and persist in SQLite. Refresh the dashboard to see them. Domain reloads preserve ownership and unacknowledged results; local-only runs are not uploaded. Dashboard timeouts mark incomplete runs Failed with an Interrupted/TimedOut explanation but never cancel or retry execution. Run requests currently require the server machine through localhost, pending remote access control.
+Dashboard **Queue test** requests join a FIFO queue and eventually execute exactly one case. Running and final results (outcome, duration, message, stack trace, output) return over the existing authenticated socket and persist in SQLite. The dashboard refreshes while queued/active work exists. Domain reloads preserve ownership and unacknowledged results; local-only runs are not uploaded. Dashboard timeouts mark incomplete runs Failed with an Interrupted/TimedOut explanation but never cancel or retry execution. Run requests currently require the server machine through localhost, pending remote access control.
 
 ## PlayMode domain reload
 
@@ -60,3 +60,5 @@ The original settings are saved before mutation in `Library/PlaytestOps/play-mod
 The run must still report a result for the selected test; an empty Unity run is not accepted as success. This avoids the Test Framework 1.8.0 assembly-cache issue observed when domain reload stays disabled across repeated PlayMode runs.
 
 Restoration updates both Unity memory and the two corresponding fields in `ProjectSettings/EditorSettings.asset` before deleting the recovery record. The targeted atomic file update preserves other settings and avoids saving unrelated assets. The expected Unity YAML fields are validated; an unsupported format or write failure retains the recovery record and reports an error.
+
+Queue dispatch uses `run.probe` / `run.ready` before `run.request`. The readiness reply waits through PlayMode exit, restored settings, discovery, and acknowledgement of previous results. Reconnection invalidates the probe. The package does not maintain a second execution queue or poll the server when idle.

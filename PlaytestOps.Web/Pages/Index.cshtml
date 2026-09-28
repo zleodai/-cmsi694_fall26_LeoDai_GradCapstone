@@ -10,14 +10,14 @@
         <p><a asp-page="/Editors">Connect a Unity Editor</a></p>
     </div>
     <form method="get" asp-page="/Index" hx-get="@Url.Page("/Index", "Tests")"
-          hx-target="#test-list" hx-swap="innerHTML" hx-disabled-elt="find button"
+          hx-target="#test-list" hx-swap="innerHTML" hx-sync="#test-list:drop" hx-disabled-elt="#test-list form button:not([disabled]), .refresh-button:not([disabled])"
           hx-indicator="#refresh-indicator" hx-request='{"timeout":15000}'>
         <button class="btn btn-primary refresh-button" type="submit">Refresh tests</button>
         <span id="refresh-indicator" class="htmx-indicator" role="status">Refreshing…</span>
     </form>
 </section>
 
-<p class="refresh-note">Run a selected test, then refresh to see its progress and results. The latest five attempts are shown; all attempts are saved.</p>
+<p class="refresh-note">Queue tests to run one at a time in each Unity project. Progress refreshes while work is active; no polling runs when idle. The latest five attempts are shown; all attempts are saved.</p>
 <p id="refresh-error" class="load-error" role="alert" hidden>Couldn't refresh tests. Check your connection and try again. Any results below may be out of date.</p>
 
 <section id="test-list" aria-label="Saved tests" aria-live="polite" aria-busy="false">

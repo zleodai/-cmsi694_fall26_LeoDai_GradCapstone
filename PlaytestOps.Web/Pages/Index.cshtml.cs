@@ -34,7 +34,7 @@ public class IndexModel(IPlaytestService tests, BridgeRegistry registry, RunServ
         try
         {
             var requested = await runs.RequestAsync(testId, cancellationToken);
-            notice = requested.Error ?? "Run requested. Refresh tests to see progress and results.";
+            notice = requested.Error ?? $"Added to queue — position {requested.QueuePosition}. Position 1 is next to run.";
         }
         catch (Exception ex) when (ex is DbException or Microsoft.EntityFrameworkCore.DbUpdateException)
         {
@@ -55,7 +55,7 @@ public class IndexModel(IPlaytestService tests, BridgeRegistry registry, RunServ
     {
         try
         {
-            return new(await tests.GetTestsAsync(cancellationToken), ConnectedProjects: registry.List().Where(x => x.Connected).Select(x => x.ProjectId).ToHashSet(), Notice: TempData["RunNotice"] as string, CanRun: BridgeRegistry.IsLocalOperator(HttpContext));
+            return new(await tests.GetTestsAsync(cancellationToken), PairedProjects: registry.List().Select(x => x.ProjectId).ToHashSet(), Notice: TempData["RunNotice"] as string, CanRun: BridgeRegistry.IsLocalOperator(HttpContext));
         }
         catch (DbException exception)
         {

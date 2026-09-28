@@ -1,4 +1,4 @@
-// Refresh is user-initiated. There are no polling timers.
+// The test fragment polls only while queued or active attempts exist. Idle refresh is manual.
 document.addEventListener("htmx:beforeRequest", function (event) {
     if (event.detail.target.id !== "test-list") return;
     document.getElementById("refresh-error").hidden = true;

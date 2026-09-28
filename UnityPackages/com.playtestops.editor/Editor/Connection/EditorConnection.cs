@@ -22,6 +22,7 @@ namespace PlaytestOps.Editor
         private static readonly SemaphoreSlim SendLock = new SemaphoreSlim(1, 1);
         private static Credentials credentials;
         private static bool needsDiscovery;
+        private static string runProbeId;
         private static int generation;
         public static event Action Changed;
         public static string Status { get; private set; } = "Disconnected";
@@ -178,6 +179,15 @@ namespace PlaytestOps.Editor
                             {
                                 SyncedCount = message.count; LastSync = DateTime.Now.ToString("HH:mm:ss"); Error = null;
                             }
+                            else if (message.type == "run.probe")
+                            {
+                                if (Guid.TryParseExact(message.requestId, "N", out _))
+                                {
+                                    runProbeId = message.requestId;
+                                    EditorApplication.update -= ReportReadyWhenIdle;
+                                    EditorApplication.update += ReportReadyWhenIdle;
+                                }
+                            }
                             else if (message.type == "run.request") PlaytestSession.RunRemote(message.runId, message.mode, message.uniqueName);
                             else if (message.type == "run.accepted")
                             {
@@ -196,10 +206,39 @@ namespace PlaytestOps.Editor
                         if (++failures >= 3) throw new InvalidOperationException("Connection lost. Check the server and pair again if it restarted.");
                         Error = "Connection interrupted; retrying shortly."; Status = "Reconnecting"; Notify();
                     }
-                    finally { if (ReferenceEquals(socket, connection)) socket = null; }
+                    finally { ClearRunProbe(); if (ReferenceEquals(socket, connection)) socket = null; }
                 }
                 await Task.Delay(TimeSpan.FromSeconds(failures * 3), ct);
             }
+        }
+
+        private static void ClearRunProbe()
+        {
+            runProbeId = null;
+            EditorApplication.update -= ReportReadyWhenIdle;
+        }
+
+        private static async void ReportReadyWhenIdle()
+        {
+            if (!Connected) { ClearRunProbe(); return; }
+            // Check after PlayMode exit and settings restoration, not merely RunFinished.
+            if (PlaytestSession.Busy || EditorApplication.isPlayingOrWillChangePlaymode ||
+                EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            DiscoverWhenReady();
+            if (needsDiscovery || PlaytestSession.Busy || outbox.items.Count > 0) return;
+            var id = runProbeId;
+            ClearRunProbe();
+            var connection = socket;
+            var ct = lifetime.Token;
+            try
+            {
+                var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(new Envelope { type = "run.ready", requestId = id }));
+                await SendLock.WaitAsync(ct);
+                try { await connection.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct); }
+                finally { SendLock.Release(); }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { connection.Abort(); }
         }
 
         private static void DiscoverWhenReady()
@@ -295,6 +334,7 @@ namespace PlaytestOps.Editor
         private static void Stop(bool clearError)
         {
             ++generation;
+            ClearRunProbe();
             EditorApplication.update -= ResumeAfterReload;
             lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
             socket?.Abort(); socket = null; credentials = null; needsDiscovery = false;
@@ -305,6 +345,7 @@ namespace PlaytestOps.Editor
         private static void StopForReload()
         {
             ++generation;
+            ClearRunProbe();
             EditorApplication.update -= ResumeAfterReload;
             lifetime?.Cancel(); socket?.Abort();
             // Keep session credentials only in SessionState; never write them to the project.

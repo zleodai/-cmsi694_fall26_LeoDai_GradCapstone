@@ -17,8 +17,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             entity.HasOne(run => run.Playtest).WithMany(test => test.Runs).HasForeignKey(run => run.PlaytestId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(run => new { run.PlaytestId, run.RequestedAt });
+            entity.HasIndex(run => run.PlaytestId).IsUnique().HasFilter("State IN ('Queued', 'Pending', 'Running')");
+            entity.HasIndex(run => new { run.State, run.RequestedAt, run.Id });
             entity.HasIndex(run => run.SessionId).IsUnique().HasFilter("State IN ('Pending', 'Running')");
-            entity.ToTable("PlaytestRuns", table => table.HasCheckConstraint("CK_PlaytestRuns_State", "State IN ('Pending', 'Running', 'Passed', 'Failed')"));
+            entity.ToTable("PlaytestRuns", table => table.HasCheckConstraint("CK_PlaytestRuns_State", "State IN ('Queued', 'Pending', 'Running', 'Passed', 'Failed')"));
         });
         builder.Entity<Playtest>(entity =>
         {
