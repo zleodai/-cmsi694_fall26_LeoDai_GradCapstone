@@ -30,7 +30,7 @@ public static class BridgeEndpoints
         app.MapGet("/api/editor/connect", HandleSocket);
     }
 
-    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor)
+    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor, SourceService sources)
     {
         var session = registry.Authenticate(context);
         if (session is null) { context.Response.StatusCode = 401; return; }
@@ -60,6 +60,7 @@ public static class BridgeEndpoints
                 try
                 {
                     using var document = JsonDocument.Parse(payload);
+                    if (sources.TryHandleReply(session, socket, document.RootElement, payload)) continue;
                     if (document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("type", out var messageType) && messageType.ValueKind == JsonValueKind.String && messageType.GetString() == "run.ready")
                     {
@@ -136,7 +137,11 @@ public static class BridgeEndpoints
         {
             socket.Abort();
         }
-        finally { registry.Detach(session, socket); }
+        finally
+        {
+            registry.Detach(session, socket);
+            sources.DisconnectedSocket(session, socket);
+        }
     }
 
     private static async Task<string?> Receive(WebSocket socket, CancellationToken ct)

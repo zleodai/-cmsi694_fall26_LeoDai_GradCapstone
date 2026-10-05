@@ -24,6 +24,8 @@ builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddRazorPages();
 builder.Services.AddSingleton<BridgeRegistry>();
+builder.Services.AddSingleton<SourceService>();
+builder.Services.AddSingleton<IProjectSourceProvider>(provider => provider.GetRequiredService<SourceService>());
 builder.Services.AddScoped<CatalogService>();
 builder.Services.AddScoped<RunService>();
 builder.Services.AddSingleton<RunMonitor>();

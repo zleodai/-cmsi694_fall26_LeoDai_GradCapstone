@@ -1,17 +1,36 @@
+@{
+    var currentPage = ViewContext.RouteData.Values["page"] as string;
+}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-bs-theme="dark">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>@ViewData["Title"] - PlaytestOps.Web</title>
     <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}' />
     <script type="importmap"></script>
+    <script src="~/js/theme.js" asp-append-version="true"></script>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/PlaytestOps.Web.styles.css" asp-append-version="true" />
+    @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
     <div class="container">
+        <nav class="dashboard-nav" aria-label="Primary navigation">
+            <a class="dashboard-brand" asp-page="/Index">PlaytestOps</a>
+            <div class="dashboard-nav-actions">
+                <div class="dashboard-nav-links">
+                    <a asp-page="/Index" aria-current="@(currentPage == "/Index" ? "page" : null)">Tests</a>
+                    <a asp-page="/Scripts" aria-current="@(currentPage == "/Scripts" ? "page" : null)">Scripts</a>
+                    <a asp-page="/Editors" aria-current="@(currentPage == "/Editors" ? "page" : null)">Editors</a>
+                </div>
+                <button id="theme-toggle" class="btn btn-outline-secondary theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true" hidden>
+                    <span data-theme-label>Dark</span>
+                </button>
+            </div>
+        </nav>
         <main role="main" class="pb-3">
             @RenderBody()
         </main>

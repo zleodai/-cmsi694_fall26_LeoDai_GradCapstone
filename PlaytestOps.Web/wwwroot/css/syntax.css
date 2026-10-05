@@ -1,0 +1,53 @@
+/* Prism token palette for the selected C# source only. No formatting/line changes. */
+:root {
+  --syntax-comment: #91a2b3;
+  --syntax-keyword: #c7a0ff;
+  --syntax-string: #8bd5a2;
+  --syntax-number: #f4c781;
+  --syntax-function: #82c9ed;
+  --syntax-type: #55d0c3;
+  --syntax-symbol: #f4b1c6;
+  --syntax-punctuation: #c0cfde;
+}
+:root[data-theme="light"] {
+  --syntax-comment: #5f7184;
+  --syntax-keyword: #7040a6;
+  --syntax-string: #226d42;
+  --syntax-number: #915615;
+  --syntax-function: #006a96;
+  --syntax-type: #006a61;
+  --syntax-symbol: #9a3155;
+  --syntax-punctuation: #43586e;
+}
+.source-code-panel code.language-csharp {
+  color: var(--code-text, #d8e5f2);
+  font-variant-ligatures: none;
+}
+.source-highlight-status {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: .8rem;
+}
+.source-code-panel .token { background: none; }
+.source-code-panel .token.comment,
+.source-code-panel .token.prolog,
+.source-code-panel .token.doctype,
+.source-code-panel .token.cdata { color: var(--syntax-comment); }
+.source-code-panel .token.keyword,
+.source-code-panel .token.boolean { color: var(--syntax-keyword); }
+.source-code-panel .token.string,
+.source-code-panel .token.char,
+.source-code-panel .token.regex { color: var(--syntax-string); }
+.source-code-panel .token.number { color: var(--syntax-number); }
+.source-code-panel .token.function { color: var(--syntax-function); }
+.source-code-panel .token.class-name,
+.source-code-panel .token.namespace,
+.source-code-panel .token.builtin { color: var(--syntax-type); }
+.source-code-panel .token.constant,
+.source-code-panel .token.symbol,
+.source-code-panel .token.property,
+.source-code-panel .token.attr-name { color: var(--syntax-symbol); }
+.source-code-panel .token.operator,
+.source-code-panel .token.punctuation { color: var(--syntax-punctuation); }

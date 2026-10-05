@@ -273,11 +273,21 @@ namespace PlaytestOps.Web.Data.Migrations
                     b.Property<DateTime?>("DispatchedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("DroppedLogCount")
+                        .HasColumnType("INTEGER");
+
                     b.Property<double>("DurationSeconds")
                         .HasColumnType("REAL");
 
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("LogsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("LogsTruncated")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Message")
                         .IsRequired()

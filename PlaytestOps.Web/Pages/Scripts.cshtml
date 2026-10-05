@@ -1,0 +1,168 @@
+@page
+@model ScriptsModel
+@using System.Globalization
+@{
+    ViewData["Title"] = "Project scripts";
+}
+
+<section class="dashboard-heading source-heading" aria-labelledby="scripts-title">
+    <div>
+        <h1 id="scripts-title">Project scripts</h1>
+        <p class="page-description">Saved working-copy C# source, read-only from a connected Unity Editor.</p>
+    </div>
+    <form method="get" asp-page="/Scripts">
+        <input type="hidden" name="projectId" value="@Model.SelectedProjectId" />
+        <input type="hidden" name="path" value="@Model.SelectedPath" />
+        <input type="hidden" name="q" value="@Model.Search" />
+        <button type="submit" class="btn btn-primary refresh-button">Refresh scripts</button>
+    </form>
+</section>
+
+@if (Model.Projects.Count > 0)
+{
+    <form method="get" asp-page="/Scripts" class="source-controls">
+        <div class="source-control">
+            <label for="source-project">Connected Unity project</label>
+            <select id="source-project" class="form-select" name="projectId">
+                @if (Model.SelectedProject is null) { <option value="">Choose a project</option> }
+                @foreach (var project in Model.Projects)
+                {
+                    <option value="@project.ProjectId" selected="@(project.ProjectId == Model.SelectedProjectId)">@project.ProjectName · Unity @project.UnityVersion</option>
+                }
+            </select>
+        </div>
+        <div class="source-control">
+            <label for="source-search">Find a filename or path</label>
+            <input id="source-search" name="q" type="search" maxlength="200" class="form-control" value="@Model.Search" placeholder="Player.cs or Assets/Scripts" />
+        </div>
+        <button type="submit" class="btn btn-outline-secondary">Browse scripts</button>
+    </form>
+}
+
+<div class="source-scope">
+    <p>Default reader folders: <code>Assets/Scripts</code> and <code>Assets/Tests</code>. Configure reader folders in Unity's <strong>Tools → PlaytestOps → Open PlaytestOps</strong> panel.</p>
+    @if (Model.Listing is { Error: null })
+    {
+        <p>Configured folders: @foreach (var root in Model.Roots) { <code>@root</code><text> </text> }</p>
+    }
+    <p>Saved <code>.cs</code> files only. Source is requested on demand and isn't saved to the PlaytestOps database. Unsaved changes aren't included. No idle polling runs on this page.</p>
+    <p>Reader folders declare which scripts you authored. Folder exclusions cannot prove authorship if vendor code is copied into an allowed folder. This view shows saved working files, not a committed repository revision.</p>
+    <details>
+        <summary>Excluded folders and reader limits</summary>
+        <p class="mt-2">Unity packages, engine files, generated files, vendor code, samples, and templates are outside the reader's scope. Excluded folder names are matched case-insensitively anywhere beneath a configured folder.</p>
+        <ul>
+            <li><code>Plugins</code>, <code>Samples</code>, <code>Samples~</code>, <code>TutorialInfo</code>, <code>Templates</code>, <code>Template</code>, <code>Examples</code>, <code>Example</code>, <code>Standard Assets</code></li>
+            <li><code>ThirdParty</code>, <code>Third-Party</code>, <code>Vendor</code>, <code>External</code></li>
+            <li><code>Packages</code>, <code>Library</code>, <code>PackageCache</code>, <code>ProjectSettings</code>, <code>UserSettings</code>, <code>Temp</code>, <code>obj</code>, <code>Logs</code>, <code>.git</code>, <code>.svn</code></li>
+        </ul>
+        <p class="mt-2">Up to 1,000 paths are listed. Files larger than 128 KiB cannot be displayed. Reader folders must be subfolders of <code>Assets</code>; selecting the entire Assets folder is disabled. Source browsing is available only through localhost on the server machine.</p>
+    </details>
+</div>
+
+@if (Model.ProjectUnavailable)
+{
+    <div class="empty-state" role="status">
+        <h2>The selected Unity Editor isn't connected.</h2>
+        <p>Source code has been cleared from this view. <a asp-page="/Editors">Connect the project</a> and refresh, or choose another currently connected project.</p>
+    </div>
+}
+else if (Model.Error is not null)
+{
+    <div class="empty-state load-error" role="alert">
+        <h2>Scripts couldn't be loaded.</h2>
+        <p>@Model.Error</p>
+        <p class="mt-2">Check the Editor connection and its reader-folder configuration, then try Refresh scripts again.</p>
+    </div>
+}
+else if (Model.Projects.Count == 0)
+{
+    <div class="empty-state">
+        <h2>No Unity Editor connected.</h2>
+        <p><a asp-page="/Editors">Connect a Unity Editor</a>, then refresh to browse its user-authored scripts.</p>
+    </div>
+}
+else if (Model.SelectedProject is null)
+{
+    <div class="empty-state">
+        <h2>Choose a connected project.</h2>
+        <p>Select the Unity project above and choose Browse scripts. Only that project's configured reader folders will be requested.</p>
+    </div>
+}
+else if (Model.Listing is { Files.Count: 0 })
+{
+    <div class="empty-state">
+        <h2>No eligible user scripts.</h2>
+        <p>Unity returned no saved <code>.cs</code> files in this project's configured reader folders. Package, sample, template, and vendor scripts are excluded.</p>
+        <p class="mt-2">Use the Unity PlaytestOps panel to configure the folder containing your own scripts, then refresh here.</p>
+    </div>
+}
+else if (Model.Listing is not null)
+{
+    @if (Model.Listing.Truncated)
+    {
+        <div class="source-notice" role="status"><strong>The path list reached its safety limit.</strong><p>Some files were omitted. Narrow the reader folders in Unity to browse the remaining scripts.</p></div>
+    }
+    <div class="source-browser" data-source-project="@Model.SelectedProjectId">
+        <section class="source-path-panel" aria-labelledby="source-paths-title">
+            <div class="source-panel-heading">
+                <h2 id="source-paths-title">@Model.SelectedProject.ProjectName</h2>
+                <p>@Model.Files.Count matching paths · @Model.Listing.Files.Count listed</p>
+            </div>
+            @if (Model.Files.Count == 0)
+            {
+                <p class="source-path-empty">No filenames or paths match this search. Clear the search and choose Browse scripts.</p>
+            }
+            else
+            {
+                <ul class="source-paths" aria-label="Configured script paths">
+                @foreach (var file in Model.Files)
+                {
+                    <li>
+                        <a asp-page="/Scripts" asp-route-projectId="@Model.SelectedProjectId" asp-route-path="@file.Path" asp-route-q="@Model.Search"
+                           aria-current="@(file.Path == Model.SelectedPath ? "true" : null)" data-source-path="@file.Path">
+                            @file.Path
+                            <small>
+                                @file.ByteLength.ToString("N0") bytes
+                                @if (file.ByteLength > ScriptsModel.MaximumFileBytes) { <text> · Too large to view</text> }
+                            </small>
+                        </a>
+                    </li>
+                }
+                </ul>
+            }
+        </section>
+
+        <section class="source-code-panel" aria-label="Read-only script source">
+        @if (Model.ReadError is not null)
+        {
+            <div class="source-code-empty load-error" role="alert"><h2>Source unavailable.</h2><p>@Model.ReadError</p></div>
+        }
+        else if (Model.SelectedScript is { } script)
+        {
+            var modified = DateTimeOffset.TryParse(script.LastModifiedUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp)
+                ? timestamp.ToUniversalTime().ToString("u") : script.LastModifiedUtc;
+            <div class="source-panel-heading"><h2>@script.Path</h2><p>Read-only · Saved working-copy C# source</p></div>
+            <pre id="source-code" class="source-code" tabindex="0" aria-label="C# source code for @script.Path" aria-describedby="source-highlight-status"><code class="language-csharp" data-csharp-highlight data-highlight-worker="@Url.Content("~/js/csharp-worker.js")">@script.Content</code></pre>
+            <p id="source-highlight-status" class="source-highlight-status" data-highlight-status role="status">Plain source · C# highlighting is available with JavaScript.</p>
+            <dl class="source-file-metadata">
+                <div><dt>File size (UTF-8 bytes)</dt><dd>@script.ByteLength.ToString("N0")</dd></div>
+                <div><dt>Saved file last modified (UTC)</dt><dd>@modified</dd></div>
+                <div><dt>Read from Unity (UTC)</dt><dd>@Model.ReadAt?.ToString("u")</dd></div>
+                <div><dt>SHA-256</dt><dd class="source-hash">@script.Sha256</dd></div>
+            </dl>
+        }
+        else
+        {
+            <div class="source-code-empty"><h2>Select a script.</h2><p>Choose a path to request its current saved contents from the connected Unity Editor.</p></div>
+        }
+        </section>
+    </div>
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/syntax.css" asp-append-version="true" />
+}
+
+@section Scripts {
+    <script src="~/js/csharp-highlighting.js" asp-append-version="true" defer></script>
+}

@@ -1,6 +1,6 @@
 {
   "name": "com.playtestops.editor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "PlaytestOps Editor",
   "description": "Editor-only test discovery, local execution, and authenticated PlaytestOps dashboard catalog synchronization.",
   "unity": "6000.6",
@@ -12,6 +12,11 @@
       "displayName": "Bridge Smoke Tests",
       "description": "Small EditMode and PlayMode checks, including an explicitly selected intentional failure.",
       "path": "Samples~/BridgeSmokeTests"
+    },
+    {
+      "displayName": "Connection Log Smoke Tests",
+      "description": "Two passing placeholders emitting expected debug, warning and error logs in EditMode and PlayMode.",
+      "path": "Samples~/ConnectionLogSmokeTests"
     }
   ]
 }

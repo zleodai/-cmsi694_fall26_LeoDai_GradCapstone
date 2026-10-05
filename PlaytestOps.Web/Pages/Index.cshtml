@@ -17,9 +17,9 @@
     </form>
 </section>
 
-<p class="refresh-note">Queue tests to run one at a time in each Unity project. Progress refreshes while work is active; no polling runs when idle. The latest five attempts are shown; all attempts are saved.</p>
+<p class="refresh-note">Only tests from currently connected Unity Editors are shown. Queue tests to run one at a time in each Unity project. Progress refreshes while work is active; no polling runs when idle. The latest five attempts are shown; all attempts are saved. Refresh after connecting or disconnecting an Editor.</p>
 <p id="refresh-error" class="load-error" role="alert" hidden>Couldn't refresh tests. Check your connection and try again. Any results below may be out of date.</p>
 
-<section id="test-list" aria-label="Saved tests" aria-live="polite" aria-busy="false">
+<section id="test-list" aria-label="Connected Editor tests" aria-live="polite" aria-busy="false">
     <partial name="_TestList" model="Model.TestList" />
 </section>

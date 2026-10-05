@@ -19,6 +19,7 @@ namespace PlaytestOps.Editor
         private static readonly Callbacks Observer = new Callbacks();
         private static TestRunnerApi api;
         private static bool discovering;
+        private static double nextLogFlush;
         private static List<TestCase> catalog = new List<TestCase>();
         public static event Action Changed;
         public static event Action CatalogChanged;
@@ -44,6 +45,7 @@ namespace PlaytestOps.Editor
             PlayModeReloadGuard.Changed += Notify;
             PlayModeReloadGuard.Recover(LastRun?.IsActive == true ? LastRun.id : null);
             TestRunnerApi.RegisterTestCallback(Observer);
+            if (LastRun?.IsActive == true) StartLogCapture();
             AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
             EditorApplication.quitting += OnQuit;
         }
@@ -51,6 +53,7 @@ namespace PlaytestOps.Editor
         private static TestRunnerApi Api => api != null ? api : api = ScriptableObject.CreateInstance<TestRunnerApi>();
         private static void BeforeReload()
         {
+            StopLogCapture();
             TestRunnerApi.UnregisterTestCallback(Observer);
             if (api != null) UnityEngine.Object.DestroyImmediate(api);
         }
@@ -113,6 +116,7 @@ namespace PlaytestOps.Editor
                     id = Guid.NewGuid().ToString("N"), dashboardRunId = dashboardRunId, test = selected,
                     lifecycle = "Starting", startedUtc = DateTime.UtcNow.ToString("O")
                 };
+                StartLogCapture();
                 Save();
                 discovering = true;
                 Notify();
@@ -171,6 +175,25 @@ namespace PlaytestOps.Editor
             Notify();
         }
         private static void Notify() => Changed?.Invoke();
+        private static void StartLogCapture()
+        {
+            RunLogCapture.Begin(LastRun);
+            nextLogFlush = EditorApplication.timeSinceStartup + 0.5;
+            EditorApplication.update -= FlushLogs;
+            EditorApplication.update += FlushLogs;
+        }
+        private static void FlushLogs()
+        {
+            if (LastRun?.IsActive != true) { StopLogCapture(); return; }
+            if (EditorApplication.timeSinceStartup < nextLogFlush) return;
+            nextLogFlush = EditorApplication.timeSinceStartup + 0.5;
+            if (RunLogCapture.Drain(LastRun)) { Save(); Notify(); }
+        }
+        private static void StopLogCapture()
+        {
+            EditorApplication.update -= FlushLogs;
+            if (LastRun != null && RunLogCapture.Drain(LastRun, true)) Save();
+        }
         private static void Save()
         {
             LastRun.revision++;
@@ -191,6 +214,7 @@ namespace PlaytestOps.Editor
 
         private static void FinishInterrupted(string message)
         {
+            StopLogCapture();
             PlayModeReloadGuard.Complete(LastRun.id);
             LastRun.lifecycle = "Interrupted";
             LastRun.message = message;
@@ -248,6 +272,7 @@ namespace PlaytestOps.Editor
             public void TestFinished(ITestResultAdaptor result)
             {
                 if (LastRun?.IsActive != true || !Matches(result.Test)) return;
+                RunLogCapture.Drain(LastRun);
                 LastRun.leafReceived = true;
                 LastRun.outcome = result.ResultState;
                 LastRun.durationSeconds = result.Duration;
@@ -265,6 +290,7 @@ namespace PlaytestOps.Editor
                 if (LastRun?.IsActive == true &&
                     (result.Test.Id == LastRun.rootId || ContainsSelectedResult(result)))
                 {
+                    StopLogCapture();
                     LastRun.lifecycle = LastRun.leafReceived ? "Completed" : "Interrupted";
                     if (!LastRun.leafReceived) LastRun.message = "Unity finished without a result for the selected test.";
                     LastRun.finishedUtc = DateTime.UtcNow.ToString("O");

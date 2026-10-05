@@ -42,7 +42,27 @@ Empty discovery usually means no discoverable test assemblies exist. Use Package
 - JSON journal entries are replaced atomically. Final NUnit XML is saved alongside them. Reports can contain project/test output. Dashboard-owned runs upload bounded result text; JSON/XML files stay local.
 - Session state is cleared by Unity when the Editor exits; saved files remain in `Library`. They are temporary project data and are removed if `Library` is deleted.
 
-## Current limits
+## Run log capture (0.2.0)
+
+Dashboard-owned attempts include structured Debug/Warning/Error/Assert/Exception entries, UTC timestamps, capture order and stack traces in `run.update`. **View full logs** on the dashboard opens a dedicated attempt page with severity filters. Final Unity Test Framework output remains available separately. Expected errors do not force a passing test to fail.
+
+Capture exists only during a PlaytestOps-owned run, from execution intent to the final callback; it includes runner/fixture messages during that interval. Thread-safe logging callbacks are drained on the Editor thread at most every 0.5 seconds and at run/reload boundaries. Run JSON, SessionState and the acknowledged snapshot outbox retain log data across normal domain reloads. Local runs retain logs in JSON but are not uploaded.
+
+Per-attempt safety limits are 1000 entries, 192000 total message/stack characters, and 16000 per field. The dashboard clearly marks clipped/incomplete capture and shows omitted-entry counts. Abrupt Editor crashes can lose messages not yet persisted/uploaded; messages emitted while the managed domain is unloaded are outside the callback's coverage. Logs can contain secrets: do not expose the unauthenticated dashboard to the public internet.
+
+Import **Connection Log Smoke Tests** for exactly two passing placeholders. Both emit debug, expected warning and expected error messages; the EditMode test also logs from a worker thread, while PlayMode spans frames and domain reload. These only verify connection/runner/log transport.
+
+## Read-only dashboard source browsing
+
+The dashboard's **Scripts** page requests saved working-copy C# source through the paired Editor socket, only when the local operator browses or refreshes. No source files are uploaded on connection or on an idle timer. Reads never modify files or save unsaved IDE buffers.
+
+The default exposed author folders are `Assets/Scripts` and `Assets/Tests`. In the Unity panel, expand **Read-only source folders**, enter one explicit Assets subfolder per line, and choose **Save source folders**. Only this action writes `ProjectSettings/PlaytestOpsSource.json`; **Use default folders (unsaved)** just fills the form. An empty saved list disables browsing. Do not declare a folder containing imported vendor code as your author folder: ownership cannot be inferred automatically.
+
+Packages/Library/engine code and folders named Plugins, Samples/Samples~, TutorialInfo, Template(s), Example(s), Standard Assets, ThirdParty/Third-Party, Vendor, External and generated/settings/VCS folders are always excluded. The entire Assets root is not allowed. Symlinks/junctions and unsafe paths are refused. UTF-8 source only; binary/NUL input and files over 128 KiB are not read. Metadata lists are capped at 1,000 paths/20,000 scanned entries, with explicit truncation. Settings are capped at 64 KiB; at most 16 folders and 512 characters per path are allowed.
+
+`source.list` and `source.read` use correlated GUID request IDs and `source.list.result`/`source.read.result` replies. Responses are bounded to 1 MiB and requests to 10 seconds. Filesystem work runs off the Editor thread; Unity API/settings access remains on the Editor thread. Compilation/import/run activity returns a retry error. Source never enters SessionState/outbox or SQLite and is not replayed across reconnects. SHA-256 hashes exact UTF-8 file bytes; source responses include UTC last-modified time. This is not a repository revision browser or UVCS control integration.
+
+## Other current limits
 
 - Unity exposes global test callbacks but no public active-job enumeration in Test Framework 1.8.0. Runs observed after package initialization block concurrent PlaytestOps actions; a run already underway when this package is first loaded cannot be reliably identified. Wait for it to finish before using the preview.
 - A lost final callback or abrupt Editor crash needs later recovery work. Do not infer success from a stale `Starting`/`Running` journal. Restart the Editor before starting another run if the preview remains busy after Unity has stopped. No automatic rerun occurs.

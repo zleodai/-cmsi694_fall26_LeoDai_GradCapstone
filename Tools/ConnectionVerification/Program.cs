@@ -52,6 +52,11 @@ long Scalar(string sql)
     using var connection = new SqliteConnection("Data Source=" + db); connection.Open();
     using var command = connection.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar());
 }
+string TextScalar(string sql)
+{
+    using var connection = new SqliteConnection("Data Source=" + db); connection.Open();
+    using var command = connection.CreateCommand(); command.CommandText = sql; return (string)command.ExecuteScalar()!;
+}
 try
 {
     await Start();
@@ -171,6 +176,114 @@ try
     await Receive(resumedSocket);
     socket = resumedSocket;
     Check((await Send(socket, Update(runId, 2, "Passed", "Passed"))).GetProperty("type").GetString() == "run.accepted", "reconnected Editor can complete its active run");
+    // Structured log snapshots use a separate attempt and only this disposable database.
+    await Run(id);
+    var loggedRunId = (await NextCommand(socket)).GetProperty("runId").GetString()!;
+    object LogEntry(int sequence, string level, string message, string stackTrace = "", string timestampUtc = "2026-10-04T20:00:00.0000000Z") =>
+        new { sequence, timestampUtc, level, message, stackTrace };
+    object LogUpdate(int sequence, object? entries, string state = "Running", string outcome = "", bool logsTruncated = false, int droppedLogCount = 0) =>
+        new { type = "run.update", runId = loggedRunId, sequence, state, outcome, durationSeconds = 1.25,
+            message = "Log verification", stackTrace = "", output = "Legacy output remains available", logs = entries, logsTruncated, droppedLogCount };
+    var initialLogs = new[] {
+        LogEntry(1, "Debug", "LOG-DEBUG <script>alert('log')</script> & debug", "<debug-stack>"),
+        LogEntry(2, "Warning", "LOG-WARNING connection warning"),
+        LogEntry(3, "Error", "LOG-ERROR expected smoke error", "at <error-stack>") };
+    using (var otherSocket = new ClientWebSocket())
+    {
+        otherSocket.Options.SetRequestHeader("Authorization", "Bearer " + otherCredential);
+        await otherSocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
+        await Receive(otherSocket);
+        Check((await Send(otherSocket, LogUpdate(1, initialLogs))).GetProperty("type").GetString() == "error" &&
+            Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 0,
+            "foreign Editor cannot inject structured logs into another project's attempt");
+        otherSocket.Abort();
+    }
+    Check((await Send(socket, LogUpdate(1, initialLogs))).GetProperty("type").GetString() == "run.accepted", "structured debug, warning, and error snapshot acknowledged");
+    var initialLogJson = TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'");
+    using (var persisted = JsonDocument.Parse(initialLogJson))
+    {
+        Check(persisted.RootElement.GetArrayLength() == 3 && persisted.RootElement[0].GetProperty("level").GetString() == "Debug" &&
+            persisted.RootElement[1].GetProperty("level").GetString() == "Warning" && persisted.RootElement[2].GetProperty("level").GetString() == "Error",
+            "SQLite persists ordered structured severity entries");
+        Check(persisted.RootElement[0].GetProperty("message").GetString() == "LOG-DEBUG <script>alert('log')</script> & debug" &&
+            persisted.RootElement[2].GetProperty("stackTrace").GetString() == "at <error-stack>", "SQLite preserves full log text and stack traces");
+    }
+    var logRoute = "/Runs/" + loggedRunId;
+    html = await client.GetStringAsync(logRoute);
+    Check(html.Contains("LOG-DEBUG") && html.Contains("LOG-WARNING") && html.Contains("LOG-ERROR") &&
+        html.IndexOf("LOG-DEBUG", StringComparison.Ordinal) < html.IndexOf("LOG-WARNING", StringComparison.Ordinal) &&
+        html.IndexOf("LOG-WARNING", StringComparison.Ordinal) < html.IndexOf("LOG-ERROR", StringComparison.Ordinal), "run detail page renders logs chronologically");
+    Check(html.Contains("&lt;script&gt;") && html.Contains("&lt;error-stack&gt;") && !html.Contains("<script>alert('log')</script>"), "run detail page HTML-encodes log messages and stack traces");
+    Check(html.Contains("hx-trigger=\"every 3s\""), "active run detail page polls for new log snapshots");
+    var partial = await client.GetStringAsync(logRoute + "?handler=Details&level=all");
+    Check(partial.Contains("LOG-DEBUG") && partial.Contains("LOG-WARNING") && partial.Contains("LOG-ERROR"), "detail polling handler returns the full current log snapshot");
+    var debugPage = await client.GetStringAsync(logRoute + "?level=debug");
+    Check(debugPage.Contains("LOG-DEBUG") && !debugPage.Contains("LOG-WARNING") && !debugPage.Contains("LOG-ERROR"), "debug filter excludes warning and error entries");
+    var warningPage = await client.GetStringAsync(logRoute + "?level=warning");
+    Check(!warningPage.Contains("LOG-DEBUG") && warningPage.Contains("LOG-WARNING") && !warningPage.Contains("LOG-ERROR"), "warning filter excludes other severity entries");
+    Check((await client.GetAsync("/Runs/" + Guid.NewGuid().ToString("N"))).StatusCode == HttpStatusCode.NotFound &&
+        (await client.GetAsync("/Runs/not-a-run-id")).StatusCode == HttpStatusCode.NotFound, "unknown and malformed run detail routes return 404");
+    async Task InvalidLogSnapshot(object? entries, string reason, bool truncated = false, int dropped = 0)
+    {
+        Check((await Send(socket, LogUpdate(2, entries, logsTruncated: truncated, droppedLogCount: dropped))).GetProperty("type").GetString() == "error" &&
+            Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 1 &&
+            TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == initialLogJson,
+            reason + " rejected without mutating accepted logs or run sequence");
+    }
+    await InvalidLogSnapshot(new[] { LogEntry(1, "Debug", "Changed prefix"), initialLogs[1], initialLogs[2] }, "rewritten immutable log prefix");
+    await InvalidLogSnapshot(initialLogs.Take(2).ToArray(), "shrinking log snapshot");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(5, "Debug", "Gap") }).ToArray(), "non-contiguous log sequence");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(4, "Info", "Invalid severity") }).ToArray(), "unknown log severity");
+    await InvalidLogSnapshot(initialLogs.Concat(new object[] { null! }).ToArray(), "null log entry");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(4, "Debug", "Invalid time", timestampUtc: "not-a-timestamp") }).ToArray(), "malformed UTC timestamp");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(4, "Debug", "Non-UTC time", timestampUtc: "2026-10-04T20:00:00+01:00") }).ToArray(), "non-UTC timestamp");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(4, "Debug", new string('m', 16001)) }).ToArray(), "oversized log message");
+    await InvalidLogSnapshot(initialLogs.Concat(new[] { LogEntry(4, "Debug", "Oversized stack", new string('s', 16001)) }).ToArray(), "oversized log stack trace");
+    await InvalidLogSnapshot(initialLogs.Concat(Enumerable.Range(4, 13).Select(n => LogEntry(n, "Debug", new string('a', 15000)))).ToArray(), "oversized aggregate log text");
+    await InvalidLogSnapshot(initialLogs.Concat(Enumerable.Range(4, 998).Select(n => LogEntry(n, "Debug", "entry"))).ToArray(), "more than 1000 log entries");
+    await InvalidLogSnapshot(initialLogs, "dropped count without truncation flag", dropped: 1);
+    await InvalidLogSnapshot(initialLogs, "negative dropped count", truncated: true, dropped: -1);
+    await InvalidLogSnapshot(null, "omitted logs with non-default truncation metadata", truncated: true);
+    await Send(socket, LogUpdate(1, new[] { LogEntry(1, "Debug", "Invalid stale rewrite") }));
+    Check(TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == initialLogJson &&
+        Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 1, "replayed log update cannot overwrite accepted snapshot");
+    await Send(socket, Update(loggedRunId, 2, "Running"));
+    Check(TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == initialLogJson &&
+        Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 2, "legacy update omitting structured logs preserves the accepted snapshot");
+    var completeLogs = initialLogs.Concat(new[] {
+        LogEntry(4, "Assert", "LOG-ASSERT assertion diagnostic"), LogEntry(5, "Exception", "LOG-EXCEPTION exception diagnostic", "at exception stack") }).ToArray();
+    Check((await Send(socket, LogUpdate(3, completeLogs, logsTruncated: true, droppedLogCount: 7))).GetProperty("type").GetString() == "run.accepted" &&
+        Scalar("SELECT LogsTruncated FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 1 &&
+        Scalar("SELECT DroppedLogCount FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 7, "extended snapshot persists assert, exception, and truncation metadata");
+    var completeLogJson = TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'");
+    Check((await Send(socket, LogUpdate(4, completeLogs))).GetProperty("type").GetString() == "error" &&
+        Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 3 &&
+        TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == completeLogJson,
+        "increasing update cannot clear a previously recorded capture truncation");
+    Check((await Send(socket, LogUpdate(4, completeLogs, logsTruncated: true, droppedLogCount: 6))).GetProperty("type").GetString() == "error" &&
+        Scalar("SELECT DroppedLogCount FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 7 &&
+        Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 3,
+        "increasing update cannot decrease previously reported omitted messages");
+    var errorPage = await client.GetStringAsync(logRoute + "?level=error");
+    Check(!errorPage.Contains("LOG-DEBUG") && !errorPage.Contains("LOG-WARNING") && errorPage.Contains("LOG-ERROR") &&
+        errorPage.Contains("LOG-ASSERT") && errorPage.Contains("LOG-EXCEPTION"), "error filter includes Error, Assert, and Exception entries");
+    Check(errorPage.Contains("7 messages were omitted") && errorPage.Contains("stored log below is incomplete"), "detail page warns that retained logs are truncated");
+    await Send(socket, LogUpdate(2, initialLogs));
+    Check(TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == completeLogJson &&
+        Scalar("SELECT DroppedLogCount FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 7, "stale smaller snapshot cannot erase logs or truncation metadata");
+    Check((await Send(socket, LogUpdate(4, completeLogs, state: "Passed", outcome: "Passed", logsTruncated: true, droppedLogCount: 7))).GetProperty("type").GetString() == "run.accepted",
+        "terminal result retains its full structured log snapshot");
+    await Send(socket, LogUpdate(5, Array.Empty<object>(), state: "Failed", outcome: "Failed"));
+    Check(TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == completeLogJson &&
+        TextScalar("SELECT State FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == "Passed",
+        "late terminal callback cannot overwrite captured logs or passing outcome");
+    html = await client.GetStringAsync(logRoute);
+    Check(html.Contains("LOG-EXCEPTION") && !html.Contains("hx-trigger=\"every 3s\""), "terminal run detail page keeps logs and stops polling");
+    partial = await client.GetStringAsync(logRoute + "?handler=Details&level=warning");
+    Check(partial.Contains("LOG-WARNING") && !partial.Contains("LOG-DEBUG") && !partial.Contains("LOG-ERROR") &&
+        !partial.Contains("hx-trigger=\"every 3s\""), "terminal detail handler respects filters without continued polling");
+    html = await client.GetStringAsync("/");
+    Check(html.Contains(logRoute), "dashboard latest attempt links to its full log page");
     // Hold the readiness reply to exercise queue order and prove no eager dispatch.
     var secondId = Scalar("SELECT Id FROM Playtests WHERE UniqueName='Checks/Two'");
     var queuedPage = await (await Run(id)).Content.ReadAsStringAsync();
@@ -218,6 +331,7 @@ try
     Check(secondQueued.GetProperty("runId").GetString() == queuedRunId, "reconnection preserves the queued attempt without duplication");
     await Send(socket, Update(queuedRunId, 1, "Passed", "Passed"));
     Check(!(await client.GetStringAsync("/")).Contains("hx-trigger=\"every 3s\""), "dashboard polling stops when queue drains");
+    Check((await client.GetStringAsync("/")).Contains(logRoute), "dashboard previous-attempt history links to persisted full logs");
     // Missing tests are skipped without sending an execution request.
     await Run(secondId);
     await Receive(socket); // hold readiness, then remove this case from discovery
@@ -235,11 +349,129 @@ try
     using var revoked = new HttpRequestMessage(HttpMethod.Get, "/api/editor/connect"); revoked.Headers.Authorization = new("Bearer", credential);
     Check((await client.SendAsync(revoked)).StatusCode == HttpStatusCode.Unauthorized, "revoked credentials cannot reconnect");
     Check(WebUtility.HtmlDecode(await (await Run(id)).Content.ReadAsStringAsync()).Contains("Connect the project's Unity Editor"), "offline run request is rejected");
+    html = await client.GetStringAsync("/");
+    Check(!html.Contains("data-test-id=\"" + id + "\"") && !html.Contains("data-test-id=\"" + secondId + "\"") &&
+        Scalar("SELECT COUNT(*) FROM Playtests") == 2, "revocation hides the disconnected catalog without deleting its saved tests");
     Stop(); await Start();
     Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE State IN ('Queued','Pending','Running')") == 0 && Scalar("SELECT COUNT(*) FROM PlaytestRuns WHERE Outcome='Interrupted'") >= 2,
         "server restart closes interrupted runs and preserves history");
-    Check(Scalar("SELECT COUNT(*) FROM Playtests") == 2 && (await client.GetStringAsync("/")).Contains("Connection checks"), "database survives server restart without reseeding");
+    Check(Scalar("SELECT COUNT(*) FROM Playtests") == 2 && !(await client.GetStringAsync("/")).Contains("Connection checks"), "database survives server restart without reseeding while disconnected catalogs remain hidden");
     Check((await client.GetStringAsync("/Editors")).Contains("No paired Editors yet."), "server restart clears ephemeral pairing sessions");
+    Check(TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == completeLogJson &&
+        Scalar("SELECT LogsTruncated FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 1 &&
+        Scalar("SELECT DroppedLogCount FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 7, "structured logs and truncation metadata survive server restart");
+    html = await client.GetStringAsync(logRoute);
+    Check(html.Contains("LOG-DEBUG") && html.Contains("LOG-WARNING") && html.Contains("LOG-EXCEPTION") &&
+        !html.Contains("hx-trigger=\"every 3s\""), "historical full log page remains readable after restart");
+    Check(!(await client.GetStringAsync("/")).Contains(logRoute), "dashboard hides previous-attempt links until their Editor reconnects");
+    // Visibility depends on an open socket, not merely a pairing or saved project.
+    string RowMarker(long testId) => "data-test-id=\"" + testId + "\"";
+    async Task<string> PairVisibilityProject(string visibilityProjectId, string projectName)
+    {
+        var editors = await client.GetStringAsync("/Editors");
+        var visibilityAnti = Regex.Match(editors, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
+        var generatedPage = await client.PostAsync("/Editors?handler=PairingCode", new FormUrlEncodedContent(new Dictionary<string,string>{{"__RequestVerificationToken", visibilityAnti}}));
+        generatedPage.EnsureSuccessStatusCode();
+        var visibilityCode = Regex.Match(await generatedPage.Content.ReadAsStringAsync(), "id=\"pairing-code\">([^<]+)").Groups[1].Value;
+        var result = await client.PostAsJsonAsync("/api/editor/pair", new { code = visibilityCode, projectId = visibilityProjectId, projectName, unityVersion = "6000.6.0f1" });
+        result.EnsureSuccessStatusCode();
+        return JsonDocument.Parse(await result.Content.ReadAsStringAsync()).RootElement.GetProperty("token").GetString()!;
+    }
+    async Task<ClientWebSocket> ConnectVisibilityProject(string visibilityCredential)
+    {
+        var visibilitySocket = new ClientWebSocket();
+        visibilitySocket.Options.SetRequestHeader("Authorization", "Bearer " + visibilityCredential);
+        await visibilitySocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
+        var ready = await Receive(visibilitySocket);
+        if (ready.GetProperty("type").GetString() != "session.ready") throw new Exception("Visibility fixture socket did not receive its handshake.");
+        return visibilitySocket;
+    }
+    async Task<string> WaitForView(Func<string, bool> expected)
+    {
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var view = await client.GetStringAsync("/");
+            if (expected(view)) return view;
+            await Task.Delay(100);
+        }
+        throw new Exception("Dashboard did not reflect the socket visibility change.");
+    }
+    html = await client.GetStringAsync("/");
+    Check(html.Contains("No Unity Editor connected.") && !html.Contains("No tests discovered."), "no connected Editor has a distinct dashboard empty state");
+    var visibilityCredential = await PairVisibilityProject(projectId, "Connection checks");
+    Check((await client.GetStringAsync("/Editors")).Contains("<strong>Disconnected</strong>") &&
+        !(await client.GetStringAsync("/")).Contains(RowMarker(id)), "paired Editor without an active socket does not expose its saved catalog");
+    var storedStatus = Scalar("SELECT Status FROM Playtests WHERE Id=" + id);
+    var storedRunCount = Scalar("SELECT COUNT(*) FROM PlaytestRuns");
+    using var visibilitySocket = await ConnectVisibilityProject(visibilityCredential);
+    html = await client.GetStringAsync("/");
+    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && html.Contains(logRoute) &&
+        Scalar("SELECT Status FROM Playtests WHERE Id=" + id) == storedStatus && Scalar("SELECT COUNT(*) FROM PlaytestRuns") == storedRunCount,
+        "reconnecting restores saved tests and history without rediscovery or changing outcomes");
+    using (var fragment = await client.GetAsync("/?handler=Tests"))
+    {
+        var fragmentHtml = await fragment.Content.ReadAsStringAsync();
+        Check(fragment.IsSuccessStatusCode && fragment.Headers.GetValues("X-PlaytestOps-Fragment").Single() == "tests" &&
+            fragmentHtml.Contains(RowMarker(id)) && fragmentHtml.Contains(RowMarker(secondId)), "tests fragment applies the same connected-project visibility as the full dashboard");
+    }
+    Scalar("INSERT INTO Playtests (Name,Description,Status,IsAvailable) VALUES ('Unlinked visibility fixture','Isolated verifier only',0,1); SELECT 1;");
+    var unlinkedId = Scalar("SELECT Id FROM Playtests WHERE Name='Unlinked visibility fixture' AND ProjectId IS NULL");
+    html = await client.GetStringAsync("/");
+    Check(!html.Contains(RowMarker(unlinkedId)) && !html.Contains("Unlinked visibility fixture") && html.Contains(RowMarker(id)),
+        "unlinked null-project placeholders are excluded even while a Unity Editor is connected");
+    Scalar("DELETE FROM Playtests WHERE Id=" + unlinkedId + "; SELECT 1;");
+    visibilitySocket.Abort();
+    html = await WaitForView(view => !view.Contains(RowMarker(id)));
+    Check(html.Contains("No Unity Editor connected.") && (await client.GetStringAsync("/Editors")).Contains("<strong>Disconnected</strong>"),
+        "socket disconnect hides rows while the paired session remains recorded");
+    Check(Scalar("SELECT COUNT(*) FROM Playtests") == 2 && Scalar("SELECT COUNT(*) FROM PlaytestRuns") == storedRunCount &&
+        (await client.GetStringAsync(logRoute)).Contains("LOG-EXCEPTION"), "socket disconnect preserves saved tests, attempts, and direct historical log access");
+    var alternateProjectId = Guid.NewGuid().ToString("N");
+    var alternateCredential = await PairVisibilityProject(alternateProjectId, "Alternate visibility project");
+    using var alternateSocket = await ConnectVisibilityProject(alternateCredential);
+    await Send(alternateSocket, Catalog(new[] { new { uniqueName = "Visibility/Alternate", fullName = "Visibility.Alternate", name = "Alternate connected test",
+        description = "Isolated visibility fixture", assembly = "Visibility", mode = "EditMode", runState = "Runnable", skipReason = "" } }));
+    var alternateId = Scalar("SELECT Id FROM Playtests WHERE UniqueName='Visibility/Alternate'");
+    html = await client.GetStringAsync("/");
+    Check(html.Contains(RowMarker(alternateId)) && !html.Contains(RowMarker(id)) && !html.Contains(RowMarker(secondId)),
+        "a different connected project's catalog does not reveal a paired-disconnected project's tests");
+    using var reconnectedVisibilitySocket = await ConnectVisibilityProject(visibilityCredential);
+    html = await client.GetStringAsync("/");
+    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && html.Contains(RowMarker(alternateId)),
+        "multiple active Unity Editors display the union of their project catalogs");
+    alternateSocket.Abort();
+    html = await WaitForView(view => !view.Contains(RowMarker(alternateId)));
+    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && Scalar("SELECT COUNT(*) FROM Playtests WHERE Id=" + alternateId) == 1,
+        "disconnecting one Editor hides only its rows and preserves the other connected catalog");
+    using (var fragment = await client.GetAsync("/?handler=Tests"))
+    {
+        var fragmentHtml = await fragment.Content.ReadAsStringAsync();
+        Check(fragmentHtml.Contains(RowMarker(id)) && !fragmentHtml.Contains(RowMarker(alternateId)), "refresh fragment excludes disconnected project rows");
+    }
+    // A queued attempt retains refresh polling during a recoverable socket drop.
+    await Run(id);
+    var visibilityProbe = await Receive(reconnectedVisibilitySocket);
+    Check(visibilityProbe.GetProperty("type").GetString() == "run.probe", "visibility fixture queues work before its connection drops");
+    reconnectedVisibilitySocket.Abort();
+    html = await WaitForView(view => !view.Contains(RowMarker(id)));
+    Check(html.Contains("No Unity Editor connected.") && html.Contains("hx-trigger=\"every 3s\""),
+        "hidden queued work keeps the tests fragment polling while its Editor is disconnected");
+    using var queueVisibilitySocket = await ConnectVisibilityProject(visibilityCredential);
+    var visibilityCommand = await NextCommand(queueVisibilitySocket);
+    Check(visibilityCommand.GetProperty("uniqueName").GetString() == "Checks/One", "reconnected Editor resumes its saved hidden queue without rediscovery");
+    await Send(queueVisibilitySocket, Update(visibilityCommand.GetProperty("runId").GetString()!, 1, "Passed", "Passed"));
+    Check(!(await client.GetStringAsync("/")).Contains("hx-trigger=\"every 3s\""), "visibility polling stops after reconnected queued work finishes");
+    queueVisibilitySocket.Abort();
+    await WaitForView(view => !view.Contains(RowMarker(id)));
+    var emptyCredential = await PairVisibilityProject(Guid.NewGuid().ToString("N"), "Empty connected project");
+    using var emptySocket = await ConnectVisibilityProject(emptyCredential);
+    await Send(emptySocket, Catalog(Array.Empty<object>()));
+    html = await client.GetStringAsync("/");
+    Check(html.Contains("No tests discovered.") && !html.Contains("No Unity Editor connected.") && !html.Contains("data-test-id="),
+        "connected empty catalog differs from the no-connected-Editor empty state");
+    Check(Scalar("SELECT COUNT(*) FROM Playtests") == 3 && Scalar("SELECT COUNT(*) FROM PlaytestRuns") == storedRunCount + 1 &&
+        TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == completeLogJson,
+        "visibility changes leave stored disconnected catalogs and full log history intact");
     Console.WriteLine($"SUCCESS: {checks} checks");
 }
 finally

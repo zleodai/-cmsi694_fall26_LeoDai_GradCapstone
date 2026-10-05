@@ -1,0 +1,3 @@
+# Preserve pinned upstream bytes used by the Prism integrity checks.
+PlaytestOps.Web/wwwroot/lib/prism/1.30.0/prism-*.min.js -text
+PlaytestOps.Web/wwwroot/lib/prism/1.30.0/LICENSE -text

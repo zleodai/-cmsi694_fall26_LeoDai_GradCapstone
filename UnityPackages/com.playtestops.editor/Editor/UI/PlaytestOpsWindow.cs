@@ -60,6 +60,7 @@ namespace PlaytestOps.Editor
             root.Add(connection);
             root.Add(new HelpBox("Get a pairing code from the dashboard's Unity Editors page. Connecting and refreshing discovery synchronize tests. Use Run test in the dashboard to execute a selected test and return its result.", HelpBoxMessageType.Info));
             RenderConnection();
+            AddSourceFolderSettings(root);
             root.Add(new HelpBox("Let any existing Unity Test Runner run finish before using this preview. Play Mode tests can reload the scripting domain.", HelpBoxMessageType.None));
             summary = new Label { style = { whiteSpace = WhiteSpace.Normal } };
             root.Add(summary);
@@ -94,6 +95,36 @@ namespace PlaytestOps.Editor
                 EditorUtility.RevealInFinder(PlaytestSession.ResultsDirectory);
             }) { text = "Open saved reports" });
             Render();
+        }
+
+        private static void AddSourceFolderSettings(VisualElement root)
+        {
+            var section = new Foldout { text = "Read-only source folders", value = false };
+            section.Add(new HelpBox("The dashboard can browse C# files only in these explicit author folders. Defaults are Assets/Scripts and Assets/Tests. Package, Library, plugin, sample, tutorial, template, example, ThirdParty, Third-Party, Vendor, and External folders are always excluded. Browsing never writes source files. An empty list disables source browsing.", HelpBoxMessageType.Info));
+            var folders = new TextField("One Assets subfolder per line") { multiline = true };
+            folders.style.minHeight = 64;
+            var feedback = new HelpBox("Only Save source folders changes ProjectSettings/PlaytestOpsSource.json.", HelpBoxMessageType.None);
+            try { folders.value = string.Join("\n", SourceSettings.Load(SourceSettings.ProjectRoot)); }
+            catch (System.Exception) { feedback.text = "Source-folder settings could not be loaded. Browsing is blocked until you save a valid explicit folder list."; }
+            section.Add(folders);
+            section.Add(new Button(() => {
+                try
+                {
+                    var roots = folders.value.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(value => value.Trim()).Where(value => value.Length > 0).ToArray();
+                    SourceSettings.Save(SourceSettings.ProjectRoot, roots);
+                    feedback.text = roots.Length == 0 ? "Saved. Source browsing is disabled." : "Saved. The next source request uses these author folders.";
+                }
+                catch (System.Exception exception)
+                {
+                    feedback.text = exception is System.InvalidOperationException ? exception.Message : "Could not save source-folder settings. Check project folder permissions.";
+                }
+            }) { text = "Save source folders" });
+            section.Add(new Button(() => {
+                folders.value = string.Join("\n", SourceReader.DefaultRoots);
+                feedback.text = "Default folders selected. Click Save source folders to apply them.";
+            }) { text = "Use default folders (unsaved)" });
+            section.Add(feedback);
+            root.Add(section);
         }
 
         private void UpdateButtons()

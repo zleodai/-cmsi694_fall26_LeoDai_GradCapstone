@@ -24,6 +24,7 @@ namespace PlaytestOps.Editor
         private static bool needsDiscovery;
         private static string runProbeId;
         private static int generation;
+        private static ClientWebSocket sourceBusyConnection;
         public static event Action Changed;
         public static string Status { get; private set; } = "Disconnected";
         public static string Error { get; private set; }
@@ -37,10 +38,21 @@ namespace PlaytestOps.Editor
         [Serializable] private sealed class ProjectIdentity { public string projectId; }
         [Serializable] private sealed class PairInput { public string code; public string projectId; public string projectName; public string unityVersion; }
         [Serializable] private sealed class PairOutput { public string token = ""; public string expiresAt = ""; }
-        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; }
+        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; }
+        [Serializable] private sealed class SourceListMessage
+        {
+            public string type = "source.list.result"; public string requestId; public string error = "";
+            public string[] roots = new string[0]; public SourceFileEntry[] files = new SourceFileEntry[0]; public bool truncated;
+        }
+        [Serializable] private sealed class SourceReadMessage
+        {
+            public string type = "source.read.result"; public string requestId; public string error = "";
+            public string path = ""; public long byteLength; public string content = ""; public string sha256 = ""; public string lastModifiedUtc = "";
+        }
         [Serializable] private sealed class RunMessage {
             public string type = "run.update"; public string runId; public int sequence; public string state; public string outcome;
             public double durationSeconds; public string message; public string stackTrace; public string output;
+            public RunLogEntry[] logs; public bool logsTruncated; public int droppedLogCount;
         }
         [Serializable] private sealed class Outbox { public List<RunMessage> items = new List<RunMessage>(); }
         private static Outbox outbox = new Outbox();
@@ -189,6 +201,8 @@ namespace PlaytestOps.Editor
                                 }
                             }
                             else if (message.type == "run.request") PlaytestSession.RunRemote(message.runId, message.mode, message.uniqueName);
+                            else if (message.type == "source.list" || message.type == "source.read")
+                                ReplySource(message, connection, currentGeneration, ct);
                             else if (message.type == "run.accepted")
                             {
                                 outbox.items.RemoveAll(x => x.runId == message.runId && x.sequence <= message.sequence);
@@ -271,7 +285,107 @@ namespace PlaytestOps.Editor
             }
         }
 
-        private static string Clip(string text, int limit) => string.IsNullOrEmpty(text) ? "" : text.Length <= limit ? text : text.Substring(0, limit - 20) + "\n[truncated]";
+        private static string Clip(string text, int limit)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            if (text.Length <= limit) return text;
+            var cut = limit - 20;
+            if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+            return text.Substring(0, cut) + "\n[truncated]";
+        }
+
+        private static async void ReplySource(Envelope request, ClientWebSocket connection, int currentGeneration, CancellationToken ct)
+        {
+            if (!Guid.TryParseExact(request.requestId, "N", out _)) return;
+            var list = request.type == "source.list";
+            var ownsRequest = !ReferenceEquals(sourceBusyConnection, connection);
+            object response;
+            if (!ownsRequest)
+            {
+                response = SourceFailure(request, "Another source request is in progress. Try again shortly.");
+            }
+            else
+            {
+                sourceBusyConnection = connection;
+                try
+                {
+                    if (PlaytestSession.Busy || EditorApplication.isCompiling || EditorApplication.isUpdating)
+                        throw new InvalidOperationException("Unity is busy compiling, importing, or running tests. Retry the source request when it is idle.");
+                    // Unity APIs and JsonUtility settings run on the Editor thread; the
+                    // bounded filesystem scan/read uses only pure C# on a worker thread.
+                    var projectRoot = SourceSettings.ProjectRoot;
+                    var roots = SourceSettings.Load(projectRoot);
+                    using (var reading = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        reading.CancelAfter(TimeSpan.FromSeconds(10));
+                        var readToken = reading.Token;
+                        if (list)
+                        {
+                            var result = await Task.Run(() => new SourceReader(projectRoot, roots).List(readToken), readToken);
+                            response = new SourceListMessage { requestId = request.requestId, roots = result.roots, files = result.files, truncated = result.truncated };
+                        }
+                        else
+                        {
+                            var path = request.path;
+                            var result = await Task.Run(() => new SourceReader(projectRoot, roots).Read(path, readToken), readToken);
+                            response = new SourceReadMessage { requestId = request.requestId, path = result.path, byteLength = result.byteLength,
+                                content = result.content, sha256 = result.sha256, lastModifiedUtc = result.lastModifiedUtc };
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        if (ReferenceEquals(sourceBusyConnection, connection)) sourceBusyConnection = null;
+                        return;
+                    }
+                    response = SourceFailure(request, "The source request reached its 10-second safety limit. Retry with narrower author folders.");
+                }
+                catch (Exception exception)
+                {
+                    // Do not send filesystem exceptions containing absolute host paths.
+                    response = SourceFailure(request, exception is InvalidOperationException
+                        ? Clip(exception.Message, 512) : "The source file or folder is unavailable. Check its permissions and source-folder settings in Unity.");
+                }
+            }
+            try
+            {
+                if (ct.IsCancellationRequested || currentGeneration != generation || !ReferenceEquals(socket, connection)) return;
+                var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(response));
+                if (bytes.Length > SourceReader.MaxResponseBytes)
+                    bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(SourceFailure(request, "The source response exceeds its safety limit.")));
+                await SendLock.WaitAsync(ct);
+                try
+                {
+                    // Reconnecting may replace the socket while this response awaits the
+                    // send gate. Never replay source contents onto a new Editor session.
+                    if (currentGeneration != generation || !ReferenceEquals(socket, connection) || connection.State != WebSocketState.Open) return;
+                    using (var sending = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        sending.CancelAfter(TimeSpan.FromSeconds(10));
+                        await connection.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, sending.Token);
+                    }
+                }
+                finally { SendLock.Release(); }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!ct.IsCancellationRequested && currentGeneration == generation && ReferenceEquals(socket, connection)) connection.Abort();
+            }
+            catch (Exception)
+            {
+                if (currentGeneration == generation && ReferenceEquals(socket, connection)) connection.Abort();
+            }
+            finally
+            {
+                if (ownsRequest && ReferenceEquals(sourceBusyConnection, connection)) sourceBusyConnection = null;
+            }
+        }
+
+        private static object SourceFailure(Envelope request, string message) => request.type == "source.list"
+            ? (object)new SourceListMessage { requestId = request.requestId, error = message }
+            : new SourceReadMessage { requestId = request.requestId, path = Clip(request.path, 512), error = message };
 
         private static void QueueRun(RunRecord run)
         {
@@ -281,7 +395,8 @@ namespace PlaytestOps.Editor
                 state = run.IsActive ? "Running" : run.lifecycle == "Completed" && run.outcome == "Passed" ? "Passed" : "Failed",
                 outcome = run.IsActive ? "" : run.lifecycle == "Interrupted" ? "Interrupted" : Clip(run.outcome, 128),
                 durationSeconds = run.durationSeconds, message = Clip(run.message, 16000),
-                stackTrace = Clip(run.stackTrace, 32000), output = Clip(run.output, 64000)
+                stackTrace = Clip(run.stackTrace, 32000), output = Clip(run.output, 64000),
+                logs = run.logs?.ToArray() ?? new RunLogEntry[0], logsTruncated = run.logsTruncated, droppedLogCount = run.droppedLogCount
             });
         }
 
@@ -301,14 +416,29 @@ namespace PlaytestOps.Editor
             var connection = socket;
             var ct = lifetime.Token;
             var currentGeneration = generation;
-            var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(message));
             try
             {
                 await SendLock.WaitAsync(ct);
-                try { await connection.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct); }
+                try
+                {
+                    // A newer cumulative snapshot supersedes waiting updates. Do not
+                    // allocate large payloads before the send gate or for old sockets.
+                    if (!Connected || !ReferenceEquals(socket, connection) ||
+                        !outbox.items.Any(x => x.runId == message.runId && x.sequence == message.sequence)) return;
+                    var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(message));
+                    using (var sending = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        sending.CancelAfter(TimeSpan.FromSeconds(10));
+                        await connection.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, sending.Token);
+                    }
+                }
                 finally { SendLock.Release(); }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                if (!ct.IsCancellationRequested && currentGeneration == generation)
+                { Error = "Run update delivery timed out; reconnecting with the saved snapshot."; Notify(); connection.Abort(); }
+            }
             catch (Exception ex)
             {
                 if (currentGeneration == generation) { Error = "Run update not delivered: " + ex.Message; Notify(); connection.Abort(); }

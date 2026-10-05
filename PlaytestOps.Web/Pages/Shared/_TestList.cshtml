@@ -5,12 +5,20 @@
     var queuedCount = Model.Tests.Sum(test => test.Runs.Count(run => run.State == "Queued"));
     var activeCount = Model.Tests.Sum(test => test.Runs.Count(run => run.State is "Pending" or "Running"));
 }
-@if (!Model.LoadFailed && queuedCount + activeCount > 0)
+@if (!Model.LoadFailed && (queuedCount + activeCount > 0 || Model.HasActiveWork))
 {
     <div class="queue-summary" role="status" hx-get="@Url.Page("/Index", "Tests")" hx-trigger="every 3s"
          hx-target="#test-list" hx-swap="innerHTML" hx-sync="#test-list:drop" hx-disabled-elt="#test-list form button:not([disabled]), .refresh-button:not([disabled])" hx-request='{"timeout":15000}'>
-        <strong>@queuedCount queued · @activeCount starting / running</strong>
-        <span>Positions are per Unity project. #1 is next. Progress updates while work is active.</span>
+        @if (queuedCount + activeCount > 0)
+        {
+            <strong>@queuedCount queued · @activeCount starting / running</strong>
+            <span>Positions are per Unity project. #1 is next. Progress updates while work is active.</span>
+        }
+        else
+        {
+            <strong>Waiting for Unity Editor reconnection</strong>
+            <span>Work is still queued or active. Tests are hidden until the Editor reconnects.</span>
+        }
     </div>
 }
 @if (Model.Notice is not null) { <p role="status" class="run-notice">@Model.Notice</p> }
@@ -21,18 +29,25 @@
         <p>The saved test data is temporarily unavailable. Try Refresh tests again.</p>
     </div>
 }
+else if (Model.ConnectedProjects is null || Model.ConnectedProjects.Count == 0)
+{
+    <div class="empty-state">
+        <h2>No Unity Editor connected.</h2>
+        <p><a asp-page="/Editors">Connect a Unity Editor</a>, then refresh to see that project's tests. Saved tests and run history are retained.</p>
+    </div>
+}
 else if (Model.Tests.Count == 0)
 {
     <div class="empty-state">
-        <h2>No tests yet.</h2>
-        <p>There are no saved tests to display. Refresh after tests have been added.</p>
+        <h2>No tests discovered.</h2>
+        <p>The connected Editor hasn't synchronized any tests yet. Discover / refresh tests in Unity, then refresh this view.</p>
     </div>
 }
 else
 {
     <div class="test-table-wrap">
         <table class="test-table">
-            <caption class="visually-hidden">Saved playtests with descriptions and current status</caption>
+            <caption class="visually-hidden">Playtests from connected Unity Editors with descriptions and current status</caption>
             <thead><tr><th scope="col">Status</th><th scope="col">Name</th><th scope="col">Description</th></tr></thead>
             <tbody>
             @foreach (var test in Model.Tests)
@@ -47,7 +62,7 @@ else
                 };
                 var latest = test.Runs.OrderByDescending(x => x.RequestedAt).FirstOrDefault();
                 var testBusy = latest?.State is "Queued" or "Pending" or "Running";
-                var canRun = Model.CanRun && test.ProjectId is not null && Model.PairedProjects?.Contains(test.ProjectId) == true && test.IsAvailable && (test.RunState is "Runnable" or "Explicit") && !testBusy;
+                var canRun = Model.CanRun && test.ProjectId is not null && Model.ConnectedProjects?.Contains(test.ProjectId) == true && test.IsAvailable && (test.RunState is "Runnable" or "Explicit") && !testBusy;
                 if (latest?.State == "Pending") { label = "Starting"; statusClass = "running"; }
                 if (latest?.State == "Queued") { label = $"Queued #{latest.QueuePosition}"; statusClass = "queued"; }
                 <tr data-test-id="@test.Id">
@@ -63,7 +78,7 @@ else
                               hx-target="#test-list" hx-swap="innerHTML" hx-sync="#test-list:drop" hx-disabled-elt="#test-list form button:not([disabled]), .refresh-button:not([disabled])" hx-request='{"timeout":15000}'>
                             <input type="hidden" name="testId" value="@test.Id" />
                             <button class="btn btn-primary btn-sm" type="submit" disabled="@(!canRun)" aria-label="Queue @test.Name (@test.Mode)">@(testBusy ? "Already queued / running" : "Queue test")</button>
-                            <small>@(testBusy ? (latest?.State == "Queued" ? $"Position {latest.QueuePosition} in this project’s queue." : "This test is starting or running.") : !Model.CanRun ? "Run from the server machine for now." : Model.PairedProjects?.Contains(test.ProjectId ?? "") != true ? "Connect Unity to run." : !test.IsAvailable ? "Refresh discovery in Unity." : "")</small>
+                            <small>@(testBusy ? (latest?.State == "Queued" ? $"Position {latest.QueuePosition} in this project’s queue." : "This test is starting or running.") : !Model.CanRun ? "Run from the server machine for now." : Model.ConnectedProjects?.Contains(test.ProjectId ?? "") != true ? "Connect Unity to run." : !test.IsAvailable ? "Refresh discovery in Unity." : "")</small>
                         </form>
                         @if (latest is not null)
                         {
@@ -76,6 +91,7 @@ else
                                 @if (!string.IsNullOrEmpty(latest.StackTrace)) { <h3>Stack trace</h3><pre>@latest.StackTrace</pre> }
                                 @if (!string.IsNullOrEmpty(latest.Output)) { <h3>Test output</h3><pre>@latest.Output</pre> }
                                 <small>Run ID: @latest.Id</small>
+                                <p><a asp-page="/Runs" asp-route-id="@latest.Id">View full logs</a></p>
                                 @if (test.Runs.Count > 1)
                                 {
                                     <h3>Previous attempts</h3>
@@ -84,6 +100,7 @@ else
                                         <details><summary>@attempt.RequestedAt.ToString("u") · @attempt.State · @attempt.DurationSeconds.ToString("F3")s</summary>
                                             <p>Outcome: @attempt.Outcome · Run ID: @attempt.Id</p>
                                             <pre>@attempt.Message</pre><pre>@attempt.StackTrace</pre><pre>@attempt.Output</pre>
+                                            <p><a asp-page="/Runs" asp-route-id="@attempt.Id">View full logs</a></p>
                                         </details>
                                     }
                                 }

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using PlaytestOps.Web.Data;
 using PlaytestOps.Web.Models;
@@ -5,7 +7,8 @@ using PlaytestOps.Web.Models;
 namespace PlaytestOps.Web.Bridge;
 
 public sealed record RunUpdate(string Type, string RunId, int Sequence, string State, string? Outcome,
-    double DurationSeconds, string? Message, string? StackTrace, string? Output);
+    double DurationSeconds, string? Message, string? StackTrace, string? Output,
+    RunLogEntry[]? Logs = null, bool LogsTruncated = false, int DroppedLogCount = 0);
 public sealed record RunRequestResult(string? RunId, string? Error, int? QueuePosition = null);
 
 public sealed class RunService(ApplicationDbContext db, BridgeRegistry registry, RunMonitor monitor)
@@ -50,6 +53,15 @@ public sealed class RunService(ApplicationDbContext db, BridgeRegistry registry,
         if (run.State == "Queued") return "Run has not been dispatched to Unity.";
         // Retried, out-of-order, or late callbacks cannot overwrite a final result or a newer attempt.
         if (run.State is "Passed" or "Failed" || update.Sequence <= run.Sequence) return null;
+        var logFailure = ValidateLogs(run, update);
+        if (logFailure is not null) return logFailure;
+        // Missing logs mean a legacy client; do not erase a snapshot already received.
+        if (update.Logs is not null)
+        {
+            run.LogsJson = JsonSerializer.Serialize(update.Logs, PlaytestRun.LogJsonOptions);
+            run.LogsTruncated = update.LogsTruncated;
+            run.DroppedLogCount = update.DroppedLogCount;
+        }
         run.Sequence = update.Sequence;
         run.State = update.State;
         if (update.State == "Running" || update.Outcome is not ("Rejected" or "Interrupted")) run.StartedAt ??= DateTime.UtcNow;
@@ -64,6 +76,41 @@ public sealed class RunService(ApplicationDbContext db, BridgeRegistry registry,
         monitor.Wake();
         return null;
     }
+
+    private static string? ValidateLogs(PlaytestRun run, RunUpdate update)
+    {
+        if (update.Logs is null)
+            return update.LogsTruncated || update.DroppedLogCount != 0 ? "Log capture metadata requires a log snapshot." : null;
+        if (update.Logs.Length > 1000 || update.DroppedLogCount < 0 ||
+            (update.DroppedLogCount > 0 && !update.LogsTruncated))
+            return "Invalid or oversized log snapshot.";
+        var totalCharacters = 0;
+        for (var index = 0; index < update.Logs.Length; index++)
+        {
+            var entry = update.Logs[index];
+            if (entry is null || entry.Sequence != index + 1 ||
+                entry.Level is not ("Debug" or "Warning" or "Error" or "Assert" or "Exception") ||
+                entry.Message is null || entry.StackTrace is null || entry.Message.Length > 16000 || entry.StackTrace.Length > 16000 ||
+                entry.TimestampUtc is null || entry.TimestampUtc.Length > 64 ||
+                !DateTimeOffset.TryParseExact(entry.TimestampUtc, TimestampFormats, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal, out var timestamp) || timestamp.Offset != TimeSpan.Zero)
+                return "Invalid or oversized log entry.";
+            totalCharacters += entry.Message.Length + entry.StackTrace.Length;
+            if (totalCharacters > 192000) return "Invalid or oversized log snapshot.";
+        }
+        var previous = run.Logs;
+        if (update.Logs.Length < previous.Count || (run.LogsTruncated && !update.LogsTruncated) ||
+            update.DroppedLogCount < run.DroppedLogCount)
+            return "A log snapshot cannot remove previous capture data.";
+        for (var index = 0; index < previous.Count; index++)
+            if (previous[index] != update.Logs[index]) return "A log snapshot cannot change previous entries.";
+        return null;
+    }
+
+    private static readonly string[] TimestampFormats = [
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", "yyyy-MM-dd'T'HH:mm:sszzz"
+    ];
 
     internal static void Fail(PlaytestRun run, string outcome, string message)
     {

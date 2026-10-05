@@ -1,0 +1,79 @@
+@model PlaytestOps.Web.Pages.RunDetailsViewModel
+@using System.Globalization
+
+@if (Model.LoadFailed)
+{
+    <div class="empty-state load-error" role="alert">
+        <h2>This attempt couldn't be loaded.</h2>
+        <p>The saved run data is temporarily unavailable. Try Refresh logs again.</p>
+    </div>
+}
+else if (Model.Run is { } run)
+{
+    if (Model.IsActive)
+    {
+        <div class="queue-summary" role="status" hx-get="@Url.Page("/Runs", "Details", new { id = run.Id, level = Model.Level })" hx-trigger="every 3s"
+             hx-target="#run-details" hx-swap="innerHTML" hx-sync="#run-details:drop" hx-disabled-elt=".run-refresh-button" hx-request='{"timeout":15000}'>
+            <strong>@run.State · Waiting for the next update from Unity</strong>
+            <span>New captured messages appear here while this attempt is active.</span>
+        </div>
+    }
+    <section class="run-card" aria-labelledby="attempt-title">
+        <h2 id="attempt-title">Attempt: @run.State</h2>
+        <dl class="run-metadata">
+            <div><dt>Outcome</dt><dd>@(string.IsNullOrEmpty(run.Outcome) ? "Awaiting Unity" : run.Outcome)</dd></div>
+            <div><dt>Requested</dt><dd>@run.RequestedAt.ToString("u")</dd></div>
+            @if (run.StartedAt is { } started) { <div><dt>Started</dt><dd>@started.ToString("u")</dd></div> }
+            @if (run.FinishedAt is { } finished) { <div><dt>Finished</dt><dd>@finished.ToString("u")</dd></div> }
+            <div><dt>Duration</dt><dd>@run.DurationSeconds.ToString("F3")s</dd></div>
+            <div><dt>Run ID</dt><dd class="run-id">@run.Id</dd></div>
+        </dl>
+        @if (!string.IsNullOrEmpty(run.Message)) { <h3>Result / error</h3><pre class="run-output">@run.Message</pre> }
+        @if (!string.IsNullOrEmpty(run.StackTrace)) { <h3>Result stack trace</h3><pre class="run-output">@run.StackTrace</pre> }
+        @if (!string.IsNullOrEmpty(run.Output))
+        {
+            <details class="test-output-details"><summary>Unity Test Framework output</summary><pre class="run-output">@run.Output</pre></details>
+        }
+    </section>
+
+    <section class="run-card log-card" aria-labelledby="captured-logs-title">
+        <h2 id="captured-logs-title">Captured Unity logs</h2>
+        <p class="log-counts">@Model.DebugCount debug · @Model.WarningCount warnings · @Model.ErrorCount errors / assertions / exceptions</p>
+        <p class="log-help">Showing @Model.Logs.Count of @Model.AllLogs.Count captured messages in capture order. Log severity and test outcome are reported separately.</p>
+        @if (run.LogsTruncated)
+        {
+            <p class="log-truncation" role="alert">Capture reached its safety limit. @run.DroppedLogCount messages were omitted; the stored log below is incomplete.</p>
+        }
+        @if (Model.AllLogs.Count == 0)
+        {
+            <p class="empty-log">@(Model.IsActive ? "No Unity log messages have arrived yet." : "No structured Unity logs were captured for this attempt. Older attempts may still contain Unity Test Framework output above.")</p>
+        }
+        else if (Model.Logs.Count == 0)
+        {
+            <p class="empty-log">No captured messages match this level. Select All levels to see the complete captured log.</p>
+        }
+        else
+        {
+            <ol class="playtest-log-list">
+            @foreach (var entry in Model.Logs)
+            {
+                var severityClass = entry.Level switch { "Warning" => "warning", "Error" or "Assert" or "Exception" => "error", _ => "debug" };
+                var displayTime = DateTimeOffset.TryParse(entry.TimestampUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp)
+                    ? timestamp.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fff 'UTC'", CultureInfo.InvariantCulture) : entry.TimestampUtc;
+                <li class="playtest-log-entry log-@severityClass" data-log-sequence="@entry.Sequence" data-log-level="@entry.Level">
+                    <div class="log-entry-heading">
+                        <span class="log-severity">@entry.Level</span>
+                        <time datetime="@entry.TimestampUtc">@displayTime</time>
+                        <span class="log-sequence">#@entry.Sequence</span>
+                    </div>
+                    <pre class="log-message">@entry.Message</pre>
+                    @if (!string.IsNullOrEmpty(entry.StackTrace))
+                    {
+                        <details id="log-stack-@run.Id-@entry.Sequence" hx-preserve="true" class="log-stack-trace"><summary>Stack trace</summary><pre>@entry.StackTrace</pre></details>
+                    }
+                </li>
+            }
+            </ol>
+        }
+    </section>
+}

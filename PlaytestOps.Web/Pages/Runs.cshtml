@@ -1,0 +1,41 @@
+@page "/Runs/{id}"
+@model RunsModel
+@{
+    ViewData["Title"] = "Playtest logs";
+    var runId = RouteData.Values["id"]?.ToString();
+}
+
+<section class="dashboard-heading run-heading" aria-labelledby="run-title">
+    <div>
+        <p><a asp-page="/Index">← Back to tests</a></p>
+        <h1 id="run-title">Playtest logs</h1>
+        @if (Model.Details.Run is { } run)
+        {
+            <p class="page-description">@run.Playtest.Name · @run.Playtest.Mode · @run.Playtest.Project?.Name</p>
+        }
+    </div>
+    <form method="get" asp-page="/Runs" asp-route-id="@runId" hx-get="@Url.Page("/Runs", "Details", new { id = runId })"
+          hx-target="#run-details" hx-swap="innerHTML" hx-sync="#run-details:drop" hx-disabled-elt=".run-refresh-button"
+          hx-indicator="#run-refresh-indicator" hx-request='{"timeout":15000}'>
+        <input type="hidden" name="level" value="@Model.Details.Level" />
+        <button class="btn btn-primary refresh-button run-refresh-button" type="submit">Refresh logs</button>
+        <span id="run-refresh-indicator" class="htmx-indicator" role="status">Refreshing…</span>
+    </form>
+</section>
+
+<form method="get" asp-page="/Runs" asp-route-id="@runId" class="log-filter">
+    <label for="log-level">Log level</label>
+    <select id="log-level" name="level" class="form-select">
+        <option value="all" selected="@(Model.Details.Level == "all")">All levels</option>
+        <option value="debug" selected="@(Model.Details.Level == "debug")">Debug messages</option>
+        <option value="warning" selected="@(Model.Details.Level == "warning")">Warnings</option>
+        <option value="error" selected="@(Model.Details.Level == "error")">Errors, assertions, and exceptions</option>
+    </select>
+    <button type="submit" class="btn btn-outline-secondary">Apply filter</button>
+</form>
+<p class="refresh-note run-refresh-note">Logs refresh every three seconds while this attempt is queued or active. Completed attempts refresh only when requested. Times are UTC.</p>
+<p id="run-refresh-error" class="load-error" role="alert" hidden>Couldn't refresh this attempt. Check your connection and try again. Any results below may be out of date.</p>
+
+<section id="run-details" aria-label="Selected playtest attempt" aria-busy="false">
+    <partial name="_RunDetails" model="Model.Details" />
+</section>

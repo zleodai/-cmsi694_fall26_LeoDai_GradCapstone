@@ -1,3 +1,6 @@
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
+
 namespace PlaytestOps.Web.Models;
 
 // A separate record preserves previous attempts when a test is run again.
@@ -19,5 +22,11 @@ public sealed class PlaytestRun
     public string Message { get; set; } = "";
     public string StackTrace { get; set; } = "";
     public string Output { get; set; } = "";
+    public string LogsJson { get; set; } = "[]";
+    public bool LogsTruncated { get; set; }
+    public int DroppedLogCount { get; set; }
+    internal static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web);
+    [NotMapped]
+    public IReadOnlyList<RunLogEntry> Logs => JsonSerializer.Deserialize<RunLogEntry[]>(LogsJson, LogJsonOptions) ?? [];
     public int Sequence { get; set; }
 }

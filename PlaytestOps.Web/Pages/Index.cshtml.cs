@@ -55,7 +55,13 @@ public class IndexModel(IPlaytestService tests, BridgeRegistry registry, RunServ
     {
         try
         {
-            return new(await tests.GetTestsAsync(cancellationToken), PairedProjects: registry.List().Select(x => x.ProjectId).ToHashSet(), Notice: TempData["RunNotice"] as string, CanRun: BridgeRegistry.IsLocalOperator(HttpContext));
+            var sessions = registry.List();
+            var connectedProjects = sessions.Where(session => session.Connected).Select(session => session.ProjectId).ToHashSet();
+            var pairedProjects = sessions.Select(session => session.ProjectId).ToHashSet();
+            return new(await tests.GetTestsAsync(connectedProjects, cancellationToken),
+                ConnectedProjects: connectedProjects, Notice: TempData["RunNotice"] as string,
+                CanRun: BridgeRegistry.IsLocalOperator(HttpContext),
+                HasActiveWork: await tests.HasActiveRunsAsync(pairedProjects, cancellationToken));
         }
         catch (DbException exception)
         {
