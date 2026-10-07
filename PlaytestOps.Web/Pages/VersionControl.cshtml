@@ -1,0 +1,213 @@
+@page
+@model VersionControlModel
+@using PlaytestOps.Web.Bridge
+@{
+    ViewData["Title"] = "Unity Version Control";
+}
+
+<section class="dashboard-heading vcs-heading" aria-labelledby="vcs-title">
+    <div>
+        <h1 id="vcs-title">Unity Version Control</h1>
+        <p class="page-description">Read-only workspace information from one connected Unity Editor.</p>
+    </div>
+    <form method="get" asp-page="/VersionControl">
+        <input type="hidden" name="projectId" value="@Model.SelectedProjectId" />
+        <input type="hidden" name="scope" value="@Model.Scope" />
+        <input type="hidden" name="offset" value="@Model.Offset" />
+        <button type="submit" class="btn btn-primary refresh-button">Refresh UVCS</button>
+    </form>
+</section>
+
+@if (Model.Projects.Count > 0)
+{
+    <form method="get" asp-page="/VersionControl" class="source-controls vcs-controls">
+        <div class="source-control">
+            <label for="vcs-project">Connected Unity project</label>
+            <select id="vcs-project" class="form-select" name="projectId">
+                @if (Model.SelectedProject is null) { <option value="">Choose a project</option> }
+                @foreach (var project in Model.Projects)
+                {
+                    <option value="@project.ProjectId" selected="@(project.ProjectId == Model.SelectedProjectId)">@project.ProjectName · Unity @project.UnityVersion</option>
+                }
+            </select>
+        </div>
+        <div class="source-control">
+            <label for="vcs-scope">Changeset history scope</label>
+            <select id="vcs-scope" class="form-select" name="scope">
+                <option value="repository" selected="@(Model.Scope == "repository")">Entire repository</option>
+                <option value="branch" selected="@(Model.Scope == "branch")">Current branch</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-outline-secondary">View version control</button>
+    </form>
+}
+
+<div class="source-scope vcs-help">
+    <p>Refresh reads the selected Editor's saved workspace and UVCS server metadata. It never checks in, updates, pulls, merges, switches branches, or edits project files. No idle polling runs on this page.</p>
+    <p>Pending changes are uncommitted files, not pending commits. Unsaved Unity edits and draft check-in comments aren't included. Metadata is not saved in the PlaytestOps database.</p>
+    <p>The current adapter requires a configured UVCS command-line client on a Windows Editor host. Sign in through the UVCS client; dashboard refresh never requests or relays UVCS credentials.</p>
+</div>
+
+@if (Model.ProjectUnavailable)
+{
+    <div class="empty-state" role="status">
+        <h2>The selected Unity Editor isn't connected.</h2>
+        <p>Version-control data has been cleared from this view. <a asp-page="/Editors">Connect the project</a> and refresh, or choose another connected Editor.</p>
+    </div>
+}
+else if (Model.Error is not null)
+{
+    <div class="empty-state load-error" role="alert">
+        <h2>Version control couldn't be loaded.</h2>
+        <p>@Model.Error</p>
+    </div>
+}
+else if (Model.Projects.Count == 0)
+{
+    <div class="empty-state">
+        <h2>No Unity Editor connected.</h2>
+        <p><a asp-page="/Editors">Connect a Unity Editor</a>, then refresh to view its UVCS workspace.</p>
+    </div>
+}
+else if (Model.SelectedProject is null)
+{
+    <div class="empty-state">
+        <h2>Choose a connected project.</h2>
+        <p>Select a project above and choose View version control. Only that Editor's UVCS workspace will be queried.</p>
+    </div>
+}
+else if (Model.Snapshot is { State: not "available" } unavailable)
+{
+    <div class="empty-state" role="status" data-vcs-state="@unavailable.State">
+        <h2>UVCS information is unavailable.</h2>
+        <p>@VersionControlModel.StateMessage(unavailable)</p>
+        <p class="mt-2 vcs-timestamp">Checked @VersionControlModel.Utc(unavailable.CapturedAtUtc). Refresh after resolving the Editor or client state.</p>
+    </div>
+}
+else if (Model.Snapshot is { } snapshot)
+{
+    <div class="vcs-snapshot" data-vcs-project="@Model.SelectedProjectId" data-vcs-offset="@Model.Offset" data-vcs-scope="@Model.Scope" data-vcs-state="@snapshot.State">
+        <section class="vcs-card" aria-labelledby="vcs-workspace-title">
+            <div class="vcs-section-heading">
+                <h2 id="vcs-workspace-title">@Model.SelectedProject.ProjectName · UVCS workspace</h2>
+                <span class="test-status status-passed">Read-only</span>
+            </div>
+            <dl class="vcs-workspace-metadata">
+                <div><dt>Workspace</dt><dd>@VersionControlModel.Display(snapshot.Workspace.Name)</dd></div>
+                <div><dt>Repository</dt><dd>@VersionControlModel.Display(snapshot.Workspace.Repository)</dd></div>
+                <div><dt>Branch</dt><dd>@VersionControlModel.Display(snapshot.Workspace.Branch)</dd></div>
+                <div><dt>Selector</dt><dd>@VersionControlModel.Display(snapshot.Workspace.SelectorType)</dd></div>
+                <div><dt>Workspace type</dt><dd>@VersionControlModel.Display(snapshot.Workspace.WorkspaceType)</dd></div>
+                <div><dt>Loaded changeset</dt><dd>@VersionControlModel.ChangesetNumber(snapshot.Workspace.CurrentChangeset)</dd></div>
+                <div><dt>Branch head changeset</dt><dd>@VersionControlModel.ChangesetNumber(snapshot.Workspace.HeadChangeset)</dd></div>
+                <div><dt>Checked by Editor</dt><dd><time datetime="@snapshot.CapturedAtUtc">@VersionControlModel.Utc(snapshot.CapturedAtUtc)</time></dd></div>
+            </dl>
+            <p class="vcs-timestamp">This is a point-in-time read, not a live subscription. Refresh after changing files, selectors, or workspace settings in Unity or UVCS.</p>
+        </section>
+
+        <section id="vcs-pending" class="vcs-card" aria-labelledby="vcs-pending-title" data-vcs-section-state="@snapshot.Pending.State">
+            <div class="vcs-section-heading"><h2 id="vcs-pending-title">Pending changes</h2><span>@(snapshot.Pending.State == "available" ? snapshot.Pending.Items.Length.ToString() + " listed" : "Unavailable")</span></div>
+            @if (snapshot.Pending.State != "available")
+            {
+                <p class="vcs-unavailable" role="status">@VersionControlService.ErrorMessage(snapshot.Pending.ErrorCode)</p>
+            }
+            else if (snapshot.Pending.Items.Length == 0)
+            {
+                <p class="vcs-empty">No pending changes were reported by UVCS.</p>
+            }
+            else
+            {
+                <div class="vcs-table-wrap" tabindex="0" role="region" aria-label="Pending change files">
+                    <table class="vcs-table vcs-pending-table">
+                        <caption class="visually-hidden">Saved uncommitted workspace files</caption>
+                        <thead><tr><th scope="col">Status</th><th scope="col">Workspace-relative path</th></tr></thead>
+                        <tbody>
+                        @foreach (var item in snapshot.Pending.Items)
+                        {
+                            <tr data-vcs-pending-path="@item.Path"><td><span class="vcs-change-status">@item.Status</span></td><td><code>@item.Path</code>@if (!string.IsNullOrEmpty(item.OldPath)) { <small class="vcs-old-path">Previously: <code>@item.OldPath</code></small> }</td></tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (snapshot.Pending.Truncated)
+            {
+                <p class="vcs-limit" role="status">The pending list reached a safety limit (up to 2,000 items and a bounded response size). Some files were omitted; inspect the complete workspace in the UVCS client.</p>
+            }
+        </section>
+
+        <section id="vcs-incoming" class="vcs-card" aria-labelledby="vcs-incoming-title" data-vcs-section-state="@snapshot.Incoming.State">
+            <div class="vcs-section-heading"><h2 id="vcs-incoming-title">Incoming changesets</h2><span>@(snapshot.Incoming.State == "available" ? snapshot.Incoming.Changesets.Length.ToString() + " listed" : "Unavailable")</span></div>
+            <p class="vcs-section-help">Verified ancestor history from the loaded changeset to this branch's head. This is not a merge/conflict preview, cross-branch comparison, or a list of incoming file differences. Long incoming comments may be clipped to 4,096 characters.</p>
+            @if (snapshot.Incoming.State != "available")
+            {
+                <p class="vcs-unavailable" role="status">@VersionControlService.ErrorMessage(snapshot.Incoming.ErrorCode)</p>
+            }
+            else if (snapshot.Incoming.Changesets.Length == 0)
+            {
+                <p class="vcs-empty">No incoming changesets were reported for this branch.</p>
+            }
+            else
+            {
+                <ol class="vcs-changesets" tabindex="0" aria-label="Incoming changesets">
+                @foreach (var changeset in snapshot.Incoming.Changesets)
+                {
+                    <li data-vcs-changeset="@changeset.Number">
+                        <div class="vcs-changeset-heading"><strong>Changeset @changeset.Number</strong><time datetime="@changeset.DateUtc">@VersionControlModel.Utc(changeset.DateUtc)</time></div>
+                        <p class="vcs-changeset-details">@VersionControlModel.Display(changeset.Author) · @VersionControlModel.Display(changeset.Branch)</p>
+                        <p class="vcs-comment">@(string.IsNullOrEmpty(changeset.Comment) ? "No comment." : changeset.Comment)</p>
+                    </li>
+                }
+                </ol>
+            }
+            @if (snapshot.Incoming.Truncated)
+            {
+                <p class="vcs-limit" role="status">The incoming list reached a safety limit (up to 200 changesets and a bounded response size). More changesets may exist; inspect the UVCS client for the complete comparison.</p>
+            }
+        </section>
+
+        <section id="vcs-history" class="vcs-card" aria-labelledby="vcs-history-title" data-vcs-section-state="@snapshot.History.State">
+            <div class="vcs-section-heading"><h2 id="vcs-history-title">Changeset history</h2><span>@(Model.Scope == "branch" ? "Current branch" : "Entire repository")</span></div>
+            <p class="vcs-section-help">Newest-first history, up to 50 changesets per page. Other branch changesets in repository history are not automatically incoming changes for this workspace. Long history comments may be clipped to 1,024 characters.</p>
+            @if (snapshot.History.State != "available")
+            {
+                <p class="vcs-unavailable" role="status">@VersionControlService.ErrorMessage(snapshot.History.ErrorCode)</p>
+            }
+            else if (snapshot.History.Changesets.Length == 0)
+            {
+                <p class="vcs-empty">No changesets were reported for this history page.</p>
+            }
+            else
+            {
+                <ol class="vcs-changesets" tabindex="0" aria-label="Changeset history">
+                @foreach (var changeset in snapshot.History.Changesets)
+                {
+                    <li data-vcs-changeset="@changeset.Number">
+                        <div class="vcs-changeset-heading"><strong>Changeset @changeset.Number</strong><time datetime="@changeset.DateUtc">@VersionControlModel.Utc(changeset.DateUtc)</time></div>
+                        <p class="vcs-changeset-details">@VersionControlModel.Display(changeset.Author) · @VersionControlModel.Display(changeset.Branch)</p>
+                        <p class="vcs-comment">@(string.IsNullOrEmpty(changeset.Comment) ? "No comment." : changeset.Comment)</p>
+                    </li>
+                }
+                </ol>
+            }
+            @if (snapshot.History.State == "available")
+            {
+                <nav class="vcs-pagination" aria-label="Changeset history pages">
+                    @if (Model.Offset > 0)
+                    {
+                        <a class="btn btn-outline-secondary" asp-page="/VersionControl" asp-route-projectId="@Model.SelectedProjectId" asp-route-scope="@Model.Scope" asp-route-offset="@Model.PreviousOffset" data-vcs-page="previous">Newer changesets</a>
+                    }
+                    <span>Offset @Model.Offset · @snapshot.History.Changesets.Length listed</span>
+                    @if (Model.CanViewNext)
+                    {
+                        <a class="btn btn-outline-secondary" asp-page="/VersionControl" asp-route-projectId="@Model.SelectedProjectId" asp-route-scope="@Model.Scope" asp-route-offset="@Model.NextOffset" data-vcs-page="next">Older changesets</a>
+                    }
+                </nav>
+                @if (snapshot.History.HasMore && !Model.CanViewNext)
+                {
+                    <p class="vcs-limit" role="status">The history pagination safety limit was reached. Use the UVCS client for older changesets.</p>
+                }
+            }
+        </section>
+    </div>
+}

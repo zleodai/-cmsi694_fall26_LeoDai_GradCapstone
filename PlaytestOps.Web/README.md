@@ -26,6 +26,8 @@ The initial SQLite schema includes the existing Identity tables. The historical 
 - `Services/PlaytestService.cs`: asynchronous, no-tracking database reads.
 - `Pages/Index.cshtml.cs`: page/fragment handlers and database-error handling.
 - `Pages/Shared/_TestList.cshtml`: list, empty state, and readable load failure.
+- `Bridge/VersionControlService.cs`: bounded, connection-scoped UVCS snapshot broker.
+- `Pages/VersionControl.cshtml`: connected-Editor workspace, pending, incoming, and history view.
 - `wwwroot/lib/htmx/`: pinned local htmx asset and license.
 
 Refresh sends `GET /?handler=Tests` and swaps only the list. It re-queries SQLite, does not change test statuses, and falls back to a full page GET without JavaScript. Database errors return a readable 503 fragment; transport errors preserve the last list and label it potentially stale. No raw exception text is sent to users.
@@ -38,7 +40,7 @@ dotnet ef database update
 dotnet ef migrations has-pending-model-changes
 ```
 
-Use migrations, not `EnsureCreated`. Non-Development deployments must apply migrations explicitly before starting the app. Registration/login UI, Identity page routes, and authentication services are removed for now. Dashboard reads are public; execution and pairing-code creation are restricted to localhost. Existing Identity database tables and migration history are retained to avoid deleting stored data; they do not enable authentication. Remote access/authentication policy is a separate implementation step; the local development certificate is not automatically trusted by phones.
+Use migrations, not `EnsureCreated`. Non-Development deployments must apply migrations explicitly before starting the app. Registration/login UI, Identity page routes, and authentication services are removed for now. Test and saved-run reads are public; source browsing, UVCS inspection, execution, and pairing-code creation are restricted to localhost. Existing Identity database tables and migration history are retained to avoid deleting stored data; they do not enable authentication. Remote access/authentication policy is a separate implementation step; the local development certificate is not automatically trusted by phones.
 
 ## Acceptance checks
 
@@ -92,11 +94,25 @@ Open **Scripts** in the dashboard navigation (`/Scripts`). It lists saved C# fil
 
 Default author folders are `Assets/Scripts` and `Assets/Tests`. Configure explicit Assets subfolders in **Tools > PlaytestOps > Open PlaytestOps > Read-only source folders**, then select **Save source folders**. This explicit action writes only `ProjectSettings/PlaytestOpsSource.json`; browsing never writes project files. An empty folder list disables access. Package/Library/engine, vendor/plugin, sample/tutorial/template/example and generated folders are excluded. Folder declarations establish the intended ownership boundary; automatic filters cannot prove authorship of code copied into an allowed folder.
 
-Source browsing requires a loopback caller and localhost/loopback Host header. Responses are no-store; source is neither persisted to SQLite nor logged. There is no idle scan or browser polling. The existing Editor socket carries typed list/read requests; `IProjectSourceProvider` isolates that working-copy transport from future VCS providers. Unity Version Control history, update/pull/check-in, source editing, unsaved IDE buffers and remote source access are not implemented.
+Source browsing requires a loopback caller and localhost/loopback Host header. Responses are no-store; source is neither persisted to SQLite nor logged. There is no idle scan or browser polling. The existing Editor socket carries typed list/read requests; `IProjectSourceProvider` isolates that working-copy transport from committed-revision providers. UVCS metadata inspection now has a separate Version control page. Viewing source at repository revisions, update/pull/check-in, source editing, unsaved IDE buffers, and remote source access are not implemented.
 
 Bounds: 16 author folders, 512-character canonical paths, 1,000 listed files, 20,000 scanned entries, 128 KiB per UTF-8 source file and 1 MiB source response. Oversized files are labeled but not read; clipped catalogs are explicit. Symlinks/junctions, traversal, binary/NUL text and invalid UTF-8 are refused. One request per project/four globally, with a 10-second deadline. Import/compilation/test activity returns a retry prompt. Disconnects/replaced sockets cancel pending reads; source is not replayed after reload.
 
 Verification: see `../Tools/SourceVerification` and Obsiddy `Docs/Source Browser Verification.md`. The original connection/run/log harness remains at 126 passing checks. At the initial source-browser checkpoint, PlaytestOps Test had no eligible scripts under its default roots; imported package smoke tests and tutorial scripts were intentionally not shown. No schema migration is needed.
+
+## Read-only Unity Version Control (2026-10-07)
+
+Open **Version control** (`/VersionControl`) and select a currently connected Unity Editor. The page displays its workspace, repository, selector, loaded/head changesets, **Pending changes**, **Incoming changesets**, and **Changeset history**. Initial navigation and **Refresh UVCS** request a new snapshot; there is no idle polling. Choose **Entire repository** or **Current branch** history, then use **Older changesets** / **Newer changesets** to page through up to 50 entries at a time. Each navigation is a fresh read, so new check-ins can shift offset-based pages.
+
+Use PlaytestOps Editor package **0.3.0** on a Windows Editor host with a configured UVCS CLI. The adapter accepts only `PlasticSCM5/client/cm.exe` beneath the standard Program Files or Program Files (x86) directory, refuses symlinks/junctions, and does not search PATH or execute a client from the project. Sign in through the UVCS client under the same OS account as Unity. Existing UVCS credentials stay on that host; the dashboard never requests or receives passwords or tokens. The backend obtains workspace data through the paired Editor rather than assuming access to its filesystem.
+
+Pending changes are saved, uncommitted workspace files, including relevant `.meta` files; they are not pending commits. Unsaved Unity edits and draft check-in comments are excluded. Incoming is supported only for a regular, static workspace tracking a branch: the adapter verifies that the loaded changeset is an ancestor of the head and returns only that branch's changesets in the interval. Equal loaded/head revisions produce a successful empty incoming list. Pinned selectors, partial/Gluon or dynamic workspaces, and unverified ancestry show an unsupported/unavailable comparison. This is not a merge-conflict preview or an incoming-file diff. Other branches' entries in repository history do not automatically count as incoming.
+
+The page requires both a loopback caller and localhost/loopback Host header and sends no-store responses. Typed `vcs.snapshot` / `vcs.snapshot.result` messages use a GUID request ID bound to the exact Editor session/socket. `IProjectVersionControlProvider` keeps the read-only provider separate from source browsing and test execution. No UVCS metadata enters SQLite, logs, SessionState, or the run outbox, and no schema migration is needed. Refresh never checks in, updates, pulls, merges, switches branches, or edits project files. Local status and remote-query failures remain separate: offline/authentication failure means unavailable, not zero changes. A workspace or selector change during collection invalidates the snapshot.
+
+Bounds: one refresh per project/four globally; up to 2,000 pending entries, 200 incoming changesets, and 50 history entries per page; history offsets 0–100,000; and a 1 MiB snapshot envelope. Byte budgets can truncate pending/incoming lists before their count limits, with a visible warning. History comments can be clipped to 1,024 characters and incoming comments to 4,096. Each CLI command is limited to 12 seconds, 4 MiB stdout, and 64 KiB stderr; snapshot collection has a 25-second aggregate deadline and the backend waits at most 30 seconds. Commands run off Unity's main thread with no shell and an exact read-only allowlist. Disconnect, reload, exit, or new import/compilation/test/PlayMode activity cancels the Editor read and its owned CLI process. Replies are not replayed onto a replacement connection, and errors use fixed safe messages rather than raw CLI output.
+
+Verification: web and verifier builds completed with zero warnings/errors; 55 pure-reader and 110 isolated HTTP/WebSocket checks passed, alongside the existing 104 source and 126 connection/run/log checks. Fifteen synthetic browser checks covered positive incoming data, paging, escaped metadata, both themes, and a narrow mobile viewport. Live Unity 1HourRoguelike compiled package 0.3.0 and returned 1,334 pending entries, eight history entries, and loaded/head changeset 7 with no incoming changesets. The feature-branch service uses `http://localhost:5283` with its own database; the existing service on 5282 is untouched. See [UVCS verification](../Tools/VersionControlVerification/README.md) for the isolated harness and evidence boundaries.
 
 ## Full playtest logs (2026-10-04)
 
@@ -114,7 +130,7 @@ Run-bridge verification (2026-09-27): 64 real HTTP/WebSocket/SQLite checks passe
 
 ## Dark theme and C# highlighting (2026-10-05)
 
-Dark is the default across Tests, Editors, Scripts, and run logs, including with JavaScript disabled. The shared **Dark / Light** toggle saves `playtestops.theme` in localStorage and applies it before styles load; Bootstrap and native controls follow the same theme. If storage is blocked, dark remains the startup default and the toggle still works for the current page. Focus indicators, statuses, log severities, fields, and source panels have matching dark/light colors.
+Dark is the default across Tests, Editors, Scripts, Version control, and run logs, including with JavaScript disabled. The shared **Dark / Light** toggle saves `playtestops.theme` in localStorage and applies it before styles load; Bootstrap and native controls follow the same theme. If storage is blocked, dark remains the startup default and the toggle still works for the current page. Focus indicators, statuses, log severities, fields, and source panels have matching dark/light colors.
 
 Only `/Scripts` loads the highlighting stylesheet and enhancement. Locally pinned Prism **1.30.0** core, C-like, and explicit C# grammar run in a same-origin Worker; there is no language autodetection, CDN request, source upload, formatting, or editing. The existing source-reading protocol and SQLite schema are unchanged.
 
