@@ -1,8 +1,8 @@
 {
   "name": "com.playtestops.editor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "PlaytestOps Editor",
-  "description": "Editor-only test discovery, local execution, and authenticated PlaytestOps dashboard catalog synchronization.",
+  "description": "Editor-only playtest execution, authenticated dashboard synchronization, and read-only Unity Version Control inspection.",
   "unity": "6000.6",
   "dependencies": {
     "com.unity.test-framework": "1.8.0"

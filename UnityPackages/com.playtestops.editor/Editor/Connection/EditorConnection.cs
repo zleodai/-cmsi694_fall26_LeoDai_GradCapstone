@@ -25,6 +25,8 @@ namespace PlaytestOps.Editor
         private static string runProbeId;
         private static int generation;
         private static ClientWebSocket sourceBusyConnection;
+        private static ClientWebSocket versionControlBusyConnection;
+        private static CancellationTokenSource versionControlReading;
         public static event Action Changed;
         public static string Status { get; private set; } = "Disconnected";
         public static string Error { get; private set; }
@@ -38,7 +40,12 @@ namespace PlaytestOps.Editor
         [Serializable] private sealed class ProjectIdentity { public string projectId; }
         [Serializable] private sealed class PairInput { public string code; public string projectId; public string projectName; public string unityVersion; }
         [Serializable] private sealed class PairOutput { public string token = ""; public string expiresAt = ""; }
-        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; }
+        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; public int offset; public string scope = ""; }
+        [Serializable] private sealed class VersionControlMessage
+        {
+            public string type = "vcs.snapshot.result", requestId = "";
+            public VersionControlSnapshot snapshot = new VersionControlSnapshot();
+        }
         [Serializable] private sealed class SourceListMessage
         {
             public string type = "source.list.result"; public string requestId; public string error = "";
@@ -203,6 +210,8 @@ namespace PlaytestOps.Editor
                             else if (message.type == "run.request") PlaytestSession.RunRemote(message.runId, message.mode, message.uniqueName);
                             else if (message.type == "source.list" || message.type == "source.read")
                                 ReplySource(message, connection, currentGeneration, ct);
+                            else if (message.type == "vcs.snapshot")
+                                ReplyVersionControl(message, connection, currentGeneration, ct);
                             else if (message.type == "run.accepted")
                             {
                                 outbox.items.RemoveAll(x => x.runId == message.runId && x.sequence <= message.sequence);
@@ -220,7 +229,7 @@ namespace PlaytestOps.Editor
                         if (++failures >= 3) throw new InvalidOperationException("Connection lost. Check the server and pair again if it restarted.");
                         Error = "Connection interrupted; retrying shortly."; Status = "Reconnecting"; Notify();
                     }
-                    finally { ClearRunProbe(); if (ReferenceEquals(socket, connection)) socket = null; }
+                    finally { ClearRunProbe(); CancelVersionControl(connection); if (ReferenceEquals(socket, connection)) socket = null; }
                 }
                 await Task.Delay(TimeSpan.FromSeconds(failures * 3), ct);
             }
@@ -387,6 +396,93 @@ namespace PlaytestOps.Editor
             ? (object)new SourceListMessage { requestId = request.requestId, error = message }
             : new SourceReadMessage { requestId = request.requestId, path = Clip(request.path, 512), error = message };
 
+        private static bool VersionControlEditorBusy => PlaytestSession.Busy || EditorApplication.isCompiling ||
+            EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode;
+
+        private static void CancelVersionControl(ClientWebSocket connection)
+        {
+            if (!ReferenceEquals(versionControlBusyConnection, connection)) return;
+            versionControlReading?.Cancel();
+            EditorApplication.update -= CancelVersionControlWhenBusy;
+        }
+
+        private static void CancelVersionControlWhenBusy()
+        {
+            if (VersionControlEditorBusy || !ReferenceEquals(socket, versionControlBusyConnection) || !Connected)
+                CancelVersionControl(versionControlBusyConnection);
+        }
+
+        private static async void ReplyVersionControl(Envelope request, ClientWebSocket connection, int currentGeneration, CancellationToken ct)
+        {
+            if (!Guid.TryParseExact(request.requestId, "N", out _) || request.offset < 0 || request.offset > 100000 ||
+                (request.scope != "repository" && request.scope != "branch")) return;
+            var ownsRequest = versionControlBusyConnection == null;
+            var response = new VersionControlMessage { requestId = request.requestId };
+            if (!ownsRequest || VersionControlEditorBusy)
+                response.snapshot = VersionControlSnapshot.Failure("busy", "editorBusy", request.offset, request.scope);
+            else
+            {
+                versionControlBusyConnection = connection;
+                using (var reading = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    versionControlReading = reading;
+                    EditorApplication.update += CancelVersionControlWhenBusy;
+                    try
+                    {
+                        // Capture Unity state on its main thread; all cm execution,
+                        // XML parsing and local workspace reads happen off that thread.
+                        var projectRoot = Path.GetDirectoryName(Application.dataPath);
+                        if (Path.DirectorySeparatorChar != '\\')
+                            response.snapshot = VersionControlSnapshot.Failure("failed", "unsupportedPlatform", request.offset, request.scope);
+                        else
+                        {
+                            var executable = VersionControlCommandRunner.FindTrustedExecutable(projectRoot);
+                            response.snapshot = await Task.Run(() => new CliVersionControlReader(projectRoot, executable)
+                                .ReadAsync(request.offset, request.scope, reading.Token), reading.Token);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (ct.IsCancellationRequested || currentGeneration != generation || !ReferenceEquals(socket, connection)) return;
+                        response.snapshot = VersionControlSnapshot.Failure("busy", "editorBusy", request.offset, request.scope);
+                    }
+                    catch (VersionControlReadException ex) { response.snapshot = VersionControlSnapshot.Failure("failed", ex.code, request.offset, request.scope); }
+                    catch { response.snapshot = VersionControlSnapshot.Failure("failed", "invalidData", request.offset, request.scope); }
+                    finally
+                    {
+                        EditorApplication.update -= CancelVersionControlWhenBusy;
+                        if (ReferenceEquals(versionControlReading, reading)) versionControlReading = null;
+                        if (ReferenceEquals(versionControlBusyConnection, connection)) versionControlBusyConnection = null;
+                    }
+                }
+            }
+            try
+            {
+                if (ct.IsCancellationRequested || currentGeneration != generation || !ReferenceEquals(socket, connection)) return;
+                var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(response));
+                if (bytes.Length > CliVersionControlReader.MaxResponseBytes)
+                    bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(new VersionControlMessage { requestId = request.requestId,
+                        snapshot = VersionControlSnapshot.Failure("failed", "outputLimit", request.offset, request.scope) }));
+                using (var sending = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    sending.CancelAfter(TimeSpan.FromSeconds(3));
+                    await SendLock.WaitAsync(sending.Token);
+                    try
+                    {
+                        if (currentGeneration != generation || !ReferenceEquals(socket, connection) || connection.State != WebSocketState.Open) return;
+                        await connection.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, sending.Token);
+                    }
+                    finally { SendLock.Release(); }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { if (currentGeneration == generation && ReferenceEquals(socket, connection)) connection.Abort(); }
+            finally
+            {
+                if (ownsRequest && ReferenceEquals(versionControlBusyConnection, connection)) versionControlBusyConnection = null;
+            }
+        }
+
         private static void QueueRun(RunRecord run)
         {
             if (string.IsNullOrEmpty(run.dashboardRunId) || run.lifecycle == "Starting") return;
@@ -465,6 +561,7 @@ namespace PlaytestOps.Editor
         {
             ++generation;
             ClearRunProbe();
+            CancelVersionControl(versionControlBusyConnection);
             EditorApplication.update -= ResumeAfterReload;
             lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
             socket?.Abort(); socket = null; credentials = null; needsDiscovery = false;
@@ -476,6 +573,7 @@ namespace PlaytestOps.Editor
         {
             ++generation;
             ClearRunProbe();
+            CancelVersionControl(versionControlBusyConnection);
             EditorApplication.update -= ResumeAfterReload;
             lifetime?.Cancel(); socket?.Abort();
             // Keep session credentials only in SessionState; never write them to the project.
