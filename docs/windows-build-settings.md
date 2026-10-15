@@ -64,4 +64,3 @@ Primary references: [Windows Player Settings](https://docs.unity3d.com/6000.6/Do
 The mutating browser script is `Tools/UiVerification/build-settings-live-checks.js`. It is deliberately fixture-specific (port 5284, project display name PlaytestOps Build Probe, profile PlaytestOps Windows Probe, GlobalProbe/ProfileProbe scenes). Do not run it against a real game: it changes and restores representative settings and stops at the observed state on failure. The example's global scene list enables GlobalProbe and disables ProfileProbe; its profile overrides scenes with ProfileProbe, uses a separate Player Settings override/version, and has empty target defines initially.
 
 Build execution and player-launch proof belong to LDAI-28, not this settings acceptance checkpoint. No gameplay, multiplayer, Steam or ML-agent qualification is claimed here.
-
