@@ -14,7 +14,7 @@ using UnityEngine;
 namespace PlaytestOps.Editor
 {
     [InitializeOnLoad]
-    public static class EditorConnection
+    public static partial class EditorConnection
     {
         private const string StateKey = "PlaytestOps.Connection";
         private static CancellationTokenSource lifetime;
@@ -40,7 +40,7 @@ namespace PlaytestOps.Editor
         [Serializable] private sealed class ProjectIdentity { public string projectId; }
         [Serializable] private sealed class PairInput { public string code; public string projectId; public string projectName; public string unityVersion; }
         [Serializable] private sealed class PairOutput { public string token = ""; public string expiresAt = ""; }
-        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; public int offset; public string scope = ""; }
+        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; public int offset; public string scope = ""; public string revision = ""; public string settingId = ""; public string value = ""; }
         [Serializable] private sealed class VersionControlMessage
         {
             public string type = "vcs.snapshot.result", requestId = "";
@@ -212,6 +212,8 @@ namespace PlaytestOps.Editor
                                 ReplySource(message, connection, currentGeneration, ct);
                             else if (message.type == "vcs.snapshot")
                                 ReplyVersionControl(message, connection, currentGeneration, ct);
+                            else if (message.type == "build.settings.get" || message.type == "build.settings.set")
+                                ReplyBuildSettings(message, connection, currentGeneration, ct);
                             else if (message.type == "run.accepted")
                             {
                                 outbox.items.RemoveAll(x => x.runId == message.runId && x.sequence <= message.sequence);

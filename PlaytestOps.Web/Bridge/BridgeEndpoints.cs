@@ -30,7 +30,7 @@ public static class BridgeEndpoints
         app.MapGet("/api/editor/connect", HandleSocket);
     }
 
-    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor, SourceService sources, VersionControlService versionControl)
+    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor, SourceService sources, VersionControlService versionControl, BuildConfigurationService buildConfiguration)
     {
         var session = registry.Authenticate(context);
         if (session is null) { context.Response.StatusCode = 401; return; }
@@ -62,6 +62,7 @@ public static class BridgeEndpoints
                     using var document = JsonDocument.Parse(payload);
                     if (sources.TryHandleReply(session, socket, document.RootElement, payload)) continue;
                     if (versionControl.TryHandleReply(session, socket, document.RootElement, payload)) continue;
+                    if (buildConfiguration.TryHandleReply(session, socket, document.RootElement, payload)) continue;
                     if (document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("type", out var messageType) && messageType.ValueKind == JsonValueKind.String && messageType.GetString() == "run.ready")
                     {
@@ -143,6 +144,7 @@ public static class BridgeEndpoints
             registry.Detach(session, socket);
             sources.DisconnectedSocket(session, socket);
             versionControl.DisconnectedSocket(session, socket);
+            buildConfiguration.DisconnectedSocket(session, socket);
         }
     }
 
