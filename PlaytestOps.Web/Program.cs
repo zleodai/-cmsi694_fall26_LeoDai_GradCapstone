@@ -28,6 +28,8 @@ builder.Services.AddSingleton<SourceService>();
 builder.Services.AddSingleton<IProjectSourceProvider>(provider => provider.GetRequiredService<SourceService>());
 builder.Services.AddSingleton<VersionControlService>();
 builder.Services.AddSingleton<IProjectVersionControlProvider>(provider => provider.GetRequiredService<VersionControlService>());
+builder.Services.AddSingleton<BuildConfigurationService>();
+builder.Services.AddSingleton<IProjectBuildConfigurationProvider>(provider => provider.GetRequiredService<BuildConfigurationService>());
 builder.Services.AddScoped<CatalogService>();
 builder.Services.AddScoped<RunService>();
 builder.Services.AddSingleton<RunMonitor>();

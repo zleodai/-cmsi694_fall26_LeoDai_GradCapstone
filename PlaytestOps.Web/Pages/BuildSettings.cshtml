@@ -1,0 +1,87 @@
+@page
+@model BuildSettingsModel
+@using PlaytestOps.Web.Bridge
+@{
+    ViewData["Title"] = "Windows build settings";
+}
+<section class="dashboard-heading" aria-labelledby="build-settings-title">
+    <div><h1 id="build-settings-title">Windows build settings</h1><p class="page-description">Read and edit the connected Editor's Windows build configuration. Changes are saved in the Unity project.</p></div>
+</section>
+<form method="get" class="source-controls">
+    <div class="source-control">
+        <label for="build-project">Connected Unity project</label>
+        <select id="build-project" name="projectId" class="form-select">
+            @if (Model.SelectedProject is null) { <option value="">Choose a project</option> }
+            @foreach (var project in Model.Projects)
+            { <option value="@project.ProjectId" selected="@(project.ProjectId == Model.SelectedProjectId)">@project.ProjectName · Unity @project.UnityVersion</option> }
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Refresh build settings</button>
+</form>
+@if (Model.Error is not null)
+{ <div class="empty-state load-error" role="alert"><h2>Build settings unavailable</h2><p>@Model.Error</p></div> }
+else if (Model.Projects.Count == 0)
+{ <div class="empty-state"><h2>No Unity Editor connected</h2><p><a asp-page="/Editors">Connect an Editor</a> to view and modify its configuration.</p></div> }
+else if (Model.Snapshot is { } snapshot)
+{
+    <section class="vcs-card" data-build-state="@snapshot.State" data-build-revision="@snapshot.Revision">
+        <h2>@Model.SelectedProject!.ProjectName · @snapshot.ProfileName</h2>
+        <dl class="vcs-workspace-metadata">
+            <div><dt>Active target</dt><dd>@snapshot.ActiveTarget</dd></div>
+            <div><dt>Settings scope</dt><dd>@snapshot.Scope</dd></div>
+            <div><dt>Profile asset</dt><dd>@(snapshot.ProfilePath.Length == 0 ? "Global platform settings" : snapshot.ProfilePath)</dd></div>
+            <div><dt>Captured</dt><dd>@snapshot.CapturedAtUtc</dd></div>
+            <div><dt>Exposed settings</dt><dd>@snapshot.Fields.Length (@snapshot.Fields.Count(field => field.Editable) editable)</dd></div>
+        </dl>
+        @if (snapshot.ErrorCode.Length > 0)
+        { <p class="@(snapshot.ErrorCode == "saved" ? "text-success" : "text-warning")" role="status">@BuildConfigurationService.StatusMessage(snapshot.ErrorCode)</p> }
+        <details class="mb-3"><summary>Scope, formats and capability report (@snapshot.Limitations.Length notes)</summary>
+            <ul>@foreach (var limitation in snapshot.Limitations) { <li>@limitation</li> }</ul>
+        </details>
+        <p>Save changes one setting at a time. A stale form is rejected if Unity settings, target, profile or connection changed. Forms expire after five minutes; refresh to renew. This page never starts a build or switches profiles.</p>
+    </section>
+    @if (snapshot.State == "available")
+    {
+        <label for="build-settings-filter" class="form-label">Find a setting</label>
+        <input type="search" id="build-settings-filter" class="form-control mb-3" placeholder="Name, ID, category…" />
+        @foreach (var category in snapshot.Fields.GroupBy(field => field.Category))
+        {
+            <details class="vcs-card build-settings-category" open>
+                <summary><strong>@category.Key</strong> · @category.Count() settings</summary>
+                @foreach (var field in category)
+                {
+                    var inputId = "setting-" + field.Id;
+                    <div class="build-settings-field border-top mt-3 pt-3" data-setting-id="@field.Id">
+                        <form method="post" class="row g-2">
+                            <input type="hidden" name="projectId" value="@Model.SelectedProjectId" />
+                            <input type="hidden" name="editorSessionId" value="@Model.SelectedProject.SessionId" />
+                            <input type="hidden" name="revision" value="@snapshot.Revision" />
+                            <input type="hidden" name="settingId" value="@field.Id" />
+                            <div class="col-md-4"><label for="@inputId" class="form-label">@field.Label</label><div><code>@field.Id</code></div><small>@field.Kind · @(field.Editable ? "Editable" : "Read-only")</small></div>
+                            <div class="col-md-6">
+                                @if (!field.Editable)
+                                { <pre id="@inputId" class="text-wrap">@field.Value</pre> }
+                                else if (field.Kind == "bool" || field.Kind == "enum")
+                                {
+                                    <select id="@inputId" name="value" class="form-select">
+                                        @foreach (var choice in field.Kind == "bool" ? new[] { "true", "false" } : field.Choices)
+                                        { <option value="@choice" selected="@(choice == field.Value)">@choice</option> }
+                                    </select>
+                                }
+                                else if (field.Kind == "json" || field.Value.Contains('\n'))
+                                { <textarea id="@inputId" name="value" class="form-control font-monospace" rows="3" maxlength="16384" spellcheck="false">@field.Value</textarea> }
+                                else
+                                { <input id="@inputId" name="value" class="form-control" value="@field.Value" maxlength="16384" spellcheck="false" /> }
+                            </div>
+                            <div class="col-md-2">@if (field.Editable) { <button type="submit" class="btn btn-outline-primary">Save</button> }</div>
+                            <small class="col-12">@field.Note</small>
+                        </form>
+                    </div>
+                }
+            </details>
+        }
+    }
+}
+@section Scripts {
+    <script src="~/js/build-settings.js" asp-append-version="true"></script>
+}
