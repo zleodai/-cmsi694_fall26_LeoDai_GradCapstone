@@ -30,7 +30,7 @@ public static class BridgeEndpoints
         app.MapGet("/api/editor/connect", HandleSocket);
     }
 
-    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor, SourceService sources, VersionControlService versionControl, BuildConfigurationService buildConfiguration)
+    private static async Task HandleSocket(HttpContext context, BridgeRegistry registry, IServiceScopeFactory scopes, ILoggerFactory loggers, RunMonitor monitor, SourceService sources, VersionControlService versionControl, BuildConfigurationService buildConfiguration, BuildExecutionService builds)
     {
         var session = registry.Authenticate(context);
         if (session is null) { context.Response.StatusCode = 401; return; }
@@ -63,6 +63,16 @@ public static class BridgeEndpoints
                     if (sources.TryHandleReply(session, socket, document.RootElement, payload)) continue;
                     if (versionControl.TryHandleReply(session, socket, document.RootElement, payload)) continue;
                     if (buildConfiguration.TryHandleReply(session, socket, document.RootElement, payload)) continue;
+                    if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("type", out var buildType) && buildType.ValueKind == JsonValueKind.String && buildType.GetString() == "build.update")
+                    {
+                        var update = JsonSerializer.Deserialize<BuildUpdate>(payload, Json);
+                        if (update is not null)
+                        {
+                            var acknowledgement = await builds.UpdateAsync(session, socket, update, ct);
+                            await registry.SendAsync(session, socket, acknowledgement, ct);
+                        }
+                        continue;
+                    }
                     if (document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("type", out var messageType) && messageType.ValueKind == JsonValueKind.String && messageType.GetString() == "run.ready")
                     {

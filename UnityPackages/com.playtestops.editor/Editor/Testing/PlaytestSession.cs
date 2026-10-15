@@ -154,7 +154,7 @@ namespace PlaytestOps.Editor
 
         private static bool CanStart()
         {
-            if (Busy || EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode)
+            if (Busy || WindowsBuildExecution.Busy || EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode)
             {
                 Error = "Wait for the current run, import, compilation, or Play Mode to finish.";
                 Notify();

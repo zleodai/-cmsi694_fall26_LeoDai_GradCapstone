@@ -1,4 +1,4 @@
-# Theme and C# highlighting verification
+# Dashboard UI verification
 
 Run from the repository root with Node.js available. The Node checks use built-in modules and the actual checked-in scripts/vendor files; no npm dependencies are needed:
 
@@ -37,3 +37,18 @@ The HTML source parser can normalize line endings before enhancement; exact-text
 ## Responsive wrapping checkpoint
 
 `wrapping-checks.js` uses a separate test browser already opened to a selected, successfully highlighted script. Run it with the CLI `run-code --filename` mechanism. The 2026-10-05 checkpoint used PlaytestOps Test's `Assets/Scripts/Services/Effects/BigHitEffect.cs`; the file must have enough long lines to demonstrate increased visual height at 390px. Eighteen checks passed at 1280/900/390px and back, covering live reflow, no horizontal overflow, identical source text and token counts, and alternate-theme wrapping. A synthetic long unbroken token with tabs/indentation is temporarily inserted only into the test browser's DOM and then restored; no source file or database is written and no tests are queued. This checkpoint reflects the later populated-source state, unlike the earlier empty-folder live-theme checkpoint. Screenshots are saved in `output/playwright/`.
+
+## Windows builds: mutating live acceptance fixtures
+
+These scripts target **only** an isolated dashboard at `http://localhost:5284`, paired to the disposable **PlaytestOps Build Probe** project with the active **PlaytestOps Windows Probe** profile. They are not generic read-only checks: they start real native builds and edit/restore profile settings. Do not run against a real game, production database, or unreviewed project callbacks. Use Unity 6000.6+ and companion package 0.5.0+ with the Windows build module installed.
+
+Fixture setup: create a disposable project, import `UnityBuildFixture/BuildRunProbe.cs` into `Assets/Scripts` and attach it to a scene object. Import `UnityBuildFixture/BuildFailureFixture.cs` into `Assets/Editor`. Save a `ProfileProbe` scene and enable it in an active Windows Build Profile named above. The verified fixture had a distinct global scene list and global version 2.1.27; the active profile used its own Player Settings version 2.0.27. Set one x64 architecture, Create Solution off, Build Scripts Only off and Install In Build Folder off. Save scenes before building. A root `SlowBuild.flag` enables four deliberately blocking 750 ms callbacks; a root `ForceBuildFailure.flag` deliberately throws a build failure and must be removed after that case.
+
+Use a dedicated Playwright CLI session, take a fresh snapshot, then run each helper via `run-code --filename`:
+
+- `build-execution-start-live.js` starts one unique build and installs a browser MutationObserver recording state/log arrival. It returns immediately; wait for native completion before the next build. It never fabricates progress percentages.
+- `build-execution-inspect-live.js` reads the current result, verifies complete-log download and severity filters, and checks terminal pages stop polling. Inspect `proof.liveMarkerBeforeTerminal` to prove logs arrived during Running rather than only after native completion.
+- `build-execution-preflight-live.js` changes/restores Create Solution and X64ARM64 in the disposable profile, starts rejected requests, and verifies actionable reasons and no output acquisition (18 checks).
+- `build-execution-layout-live.js` checks the recorded failure and history pages in dark/light themes at 390/1440 px (14 checks). Its build ID is explicitly tied to the 2026-10-15 checkpoint; update it only after identifying a new isolated failure record.
+
+The 2026-10-15 checkpoint produced two successful dashboard-started players in distinct `Builds/PlaytestOps/<id>` folders, observed debug/warning logs while synchronous native work ran, verified manifest/executable hashes and prior output preservation, and launched **both exact EXEs** with `-batchmode -nographics -playtestops-smoke -logFile <owned-log>`. Both exited 0 with READY version 2.0.27 and SMOKE_PASSED frame markers. A deliberate native failure showed Debug, Warning, Exception and Error logs in the dashboard and full download. Six saved result records retained state/logs across a dashboard restart. See [native build evidence](../../docs/windows-build-execution.md) for exact IDs and proof boundaries; these fixtures are not Unity Test Framework tests or multiplayer qualification.

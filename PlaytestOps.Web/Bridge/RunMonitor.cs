@@ -73,6 +73,7 @@ public sealed class RunMonitor(IServiceScopeFactory scopes, BridgeRegistry regis
             await db.SaveChangesAsync(ct);
             foreach (var project in runs.GroupBy(x => x.Playtest.ProjectId))
             {
+                if (await db.UnityBuilds.AnyAsync(build => build.ProjectId == project.Key && (build.State == "Pending" || build.State == "Running" || build.State == "Unknown"), ct)) continue;
                 if (project.Any(x => x.State is "Pending" or "Running")) continue;
                 var next = project.FirstOrDefault(x => x.State == "Queued");
                 if (next is null)

@@ -22,6 +22,7 @@ namespace PlaytestOps.Editor
     [Serializable] public sealed class BuildConfigurationSnapshot
     {
         public int protocolVersion = 1;
+        public bool buildExecutionSupported = true;
         public string capturedAtUtc = "", revision = new string('0', 64), state = "available", errorCode = "";
         public string unityVersion = "", activeTarget = "", profileName = "", profilePath = "", scope = "";
         public BuildConfigurationField[] fields = new BuildConfigurationField[0];
@@ -73,9 +74,10 @@ namespace PlaytestOps.Editor
             "m_Architecture", "m_CreateSolution", "m_CopyPDBFiles"
         }, StringComparer.Ordinal);
         public static bool Busy => PlaytestSession.Busy || EditorApplication.isCompiling || EditorApplication.isUpdating ||
-            EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer;
+            EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer || WindowsBuildExecution.Busy;
 
         public static BuildConfigurationSnapshot Read() => Capture(out _);
+        internal static BuildConfigurationSnapshot ReadForBuild() => Capture(out _, allowBusy: true);
 
         public static BuildConfigurationSnapshot Apply(string revision, string settingId, string value)
         {
