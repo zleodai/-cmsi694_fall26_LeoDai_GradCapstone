@@ -71,3 +71,6 @@ appsettings.*.local.json
 [Rr]ecordings/
 [Bb]uild/
 [Bb]uilds/
+
+# Personal planning notes belong in the Obsidian vault, not the code repository.
+/Projects/PlaytestOps/Plans/
