@@ -1,0 +1,31 @@
+@page "/Builds/{id}"
+@model BuildDetailsModel
+@using PlaytestOps.Web.Bridge
+@{ ViewData["Title"] = "Build result"; var build = Model.Build; }
+<section class="dashboard-heading"><div><p><a asp-page="/Builds" asp-route-projectId="@build.ProjectId">← Build history</a></p><h1>Windows build</h1><p class="page-description">@build.ProjectName · <code>@build.Id</code></p></div></section>
+<section id="build-detail" class="vcs-card" data-build-id="@build.Id" data-build-active="@BuildExecutionService.Polls(build.State).ToString().ToLowerInvariant()" data-build-more="@Model.HasMore.ToString().ToLowerInvariant()">
+    <h2 id="build-state" role="status">@build.State</h2><p id="build-phase">@build.Phase</p><p id="build-message">@build.Message</p>
+    <dl class="vcs-workspace-metadata">
+        <div><dt>Requested UTC</dt><dd>@build.RequestedAt.ToString("u")</dd></div><div><dt>Unity / target</dt><dd id="build-target">@build.UnityVersion · @build.ActiveTarget</dd></div>
+        <div><dt>Profile</dt><dd id="build-profile">@build.ProfilePath</dd></div><div><dt>Duration (seconds)</dt><dd id="build-duration">@build.DurationSeconds.ToString("F1")</dd></div>
+        <div><dt>Warnings / errors</dt><dd id="build-counts">@build.TotalWarnings / @build.TotalErrors</dd></div><div><dt>Build bytes</dt><dd id="build-bytes">@build.TotalBytes</dd></div>
+    </dl>
+    <h3>Preserved output on the Unity machine</h3><p><code id="build-output">@build.OutputPath</code></p>
+    <p>Executable: <code id="build-executable">@build.ExecutablePath</code></p><p>Artifact manifest: <code id="build-manifest">@build.ManifestPath</code></p>
+    <p id="build-truncation" class="text-warning" hidden="@(!build.LogsTruncated)">Capture safety limit reached. Some entries or text were omitted; dropped entries/parts: <span>@build.DroppedLogCount</span>. Check the per-build log and Unity Editor.log on the Editor machine for additional native tool output.</p>
+    <p id="build-refresh-error" class="load-error" role="alert" hidden>Live refresh stopped after a connection error. Values may be stale; reload this page to resume.</p>
+    <p>Live status refreshes once per second while this request is pending/running and stops at completion or Unknown. Disconnect is not cancellation. Unknown can reconcile when this project reconnects; inspect Unity before clearing its reservation.</p>
+    <p>A heartbeat proves reporting is alive, not native build progress. There is no dashboard force-cancel; inspect a stalled build in Unity.</p>
+    <div id="build-unknown-actions" hidden="@(build.State != "Unknown")"><form method="post" asp-page-handler="ResolveUnknown"><p>Only clear this reservation after checking Unity. This does not stop a running build and existing output will not be removed.</p><button class="btn btn-outline-warning" type="submit">Acknowledge unknown result and release reservation</button></form></div>
+</section>
+<section class="vcs-card"><div class="vcs-section-heading"><h2>Build logs</h2><a asp-page="/BuildDetails" asp-page-handler="LogFile" asp-route-id="@build.Id">Download all captured logs</a></div>
+    <label for="build-log-level">Show</label><select id="build-log-level" class="form-select mb-3"><option value="all">All levels</option><option value="Debug">Debug</option><option value="Warning">Warnings</option><option value="errors">Errors / assertions / exceptions</option></select>
+    <p>Application logs (including threaded build callbacks) and BuildReport step messages are captured, with stack traces. Duplicate report/console messages may appear. Limits: 10,000 entries, 8 MiB characters total, 16,000 characters each for message and stack trace. Any clipping is explicitly marked.</p>
+    <div id="build-logs" data-last-sequence="@(Model.Logs.LastOrDefault()?.Sequence ?? 0)">
+        @foreach (var log in Model.Logs)
+        { <pre class="text-wrap border-top pt-2 build-log-entry" data-level="@log.Level" data-sequence="@log.Sequence">[@log.Sequence] @log.TimestampUtc @log.Level @(log.Truncated ? "[TRUNCATED]" : "")
+@log.Message
+@log.StackTrace</pre> }
+    </div>
+</section>
+@section Scripts { <script src="~/js/builds.js" asp-append-version="true"></script> }

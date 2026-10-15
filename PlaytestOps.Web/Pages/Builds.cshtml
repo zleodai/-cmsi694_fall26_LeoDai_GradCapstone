@@ -1,0 +1,40 @@
+@page "/Builds"
+@model BuildsModel
+@using PlaytestOps.Web.Bridge
+@{ ViewData["Title"] = "Windows builds"; }
+<section class="dashboard-heading"><div><h1>Windows builds</h1><p class="page-description">Build the active Windows profile locally in Unity. Every request gets a new, preserved output folder.</p></div></section>
+<form method="get" class="source-controls">
+    <div class="source-control"><label for="build-project">Connected Unity project</label><select id="build-project" name="projectId" class="form-select">
+        @if (Model.SelectedProject is null) { <option value="">Choose a project</option> }
+        @foreach (var project in Model.Projects) { <option value="@project.ProjectId" selected="@(project.ProjectId == Model.SelectedProjectId)">@project.ProjectName · @project.UnityVersion</option> }
+    </select></div><button class="btn btn-primary" type="submit">Refresh configuration and history</button>
+</form>
+@if (Model.Error is not null) { <div class="empty-state load-error" role="alert">@Model.Error <a asp-page="/Builds" asp-route-projectId="@Model.SelectedProjectId">Refresh</a></div> }
+@if (Model.Configuration is { } configuration)
+{
+    <section class="vcs-card"><h2>@configuration.ProfileName</h2><p>@configuration.ActiveTarget · @configuration.Scope</p><p><code>@configuration.ProfilePath</code></p>
+        <p><a asp-page="/BuildSettings" asp-route-projectId="@Model.SelectedProjectId">Review/edit Windows build settings</a> before building. Unsaved scenes are never saved or discarded automatically.</p>
+        @if (!configuration.BuildExecutionSupported) { <p role="alert">Update the connected Editor package to PlaytestOps 0.5.0 or newer to enable dashboard builds. Settings-only packages cannot execute builds.</p> }
+        @if (Model.RequestKey.Length > 0 && !Model.Held)
+        {
+            <form method="post" asp-page-handler="Start">
+                <input type="hidden" name="projectId" value="@Model.SelectedProjectId" /><input type="hidden" name="editorSessionId" value="@Model.SelectedProject!.SessionId" />
+                <input type="hidden" name="revision" value="@configuration.Revision" /><input type="hidden" name="requestKey" value="@Model.RequestKey" />
+                <button type="submit" class="btn btn-primary">Build Windows player</button>
+            </form>
+        }
+        else { <p role="status">@(Model.Held ? "An active or unknown build holds this project. Open its record below to inspect or resolve it." : BuildConfigurationService.StatusMessage(configuration.ErrorCode))</p> }
+        <p class="mt-3">Local build only: no Build And Run, remote deployment, player launch, custom command or browser-supplied output path. Test/build work is mutually exclusive. A disconnect never cancels Unity and requests are never automatically replayed.</p>
+    </section>
+}
+else if (Model.Projects.Count == 0) { <div class="empty-state"><h2>No Unity Editor connected</h2><p><a asp-page="/Editors">Connect an Editor</a>. Saved build history remains available below.</p></div> }
+<section class="vcs-card"><h2>Build history <small>(latest 50)</small></h2>
+    @if (Model.History.Count == 0) { <p>No build requests saved.</p> }
+    else
+    {
+        <div class="vcs-table-wrap"><table class="vcs-table"><thead><tr><th>Requested UTC</th><th>Project</th><th>State</th><th>Build</th></tr></thead><tbody>
+            @foreach (var build in Model.History)
+            { <tr data-build-id="@build.Id"><td>@build.RequestedAt.ToString("u")</td><td>@build.ProjectName</td><td>@build.State · @build.Phase</td><td><a asp-page="/BuildDetails" asp-route-id="@build.Id">@build.Id</a></td></tr> }
+        </tbody></table></div>
+    }
+</section>

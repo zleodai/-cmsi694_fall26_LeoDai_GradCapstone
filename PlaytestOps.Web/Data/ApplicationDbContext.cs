@@ -9,10 +9,13 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Playtest> Playtests => Set<Playtest>();
     public DbSet<PlaytestRun> PlaytestRuns => Set<PlaytestRun>();
     public DbSet<UnityProject> UnityProjects => Set<UnityProject>();
+    public DbSet<UnityBuild> UnityBuilds => Set<UnityBuild>();
+    public DbSet<UnityBuildLog> UnityBuildLogs => Set<UnityBuildLog>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+        ConfigureBuilds(builder);
         builder.Entity<PlaytestRun>(entity =>
         {
             entity.HasOne(run => run.Playtest).WithMany(test => test.Runs).HasForeignKey(run => run.PlaytestId).OnDelete(DeleteBehavior.Restrict);
@@ -30,6 +33,23 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             entity.Property(test => test.IsAvailable).HasDefaultValue(true);
             entity.HasIndex(test => new { test.ProjectId, test.Mode, test.UniqueName }).IsUnique();
             entity.HasOne(test => test.Project).WithMany().HasForeignKey(test => test.ProjectId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+    internal static void ConfigureBuilds(ModelBuilder builder)
+    {
+        builder.Entity<UnityBuild>(entity =>
+        {
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.RequestKey).IsUnique();
+            entity.HasIndex(item => new { item.ProjectId, item.RequestedAt });
+            entity.HasIndex(item => item.ProjectId).IsUnique().HasFilter("State IN ('Pending', 'Running', 'Unknown')");
+            entity.ToTable("UnityBuilds", table => table.HasCheckConstraint("CK_UnityBuilds_State", "State IN ('Pending', 'Running', 'Succeeded', 'Failed', 'Rejected', 'Unknown', 'Interrupted')"));
+        });
+        builder.Entity<UnityBuildLog>(entity =>
+        {
+            entity.HasKey(item => new { item.BuildId, item.Sequence });
+            entity.HasOne<UnityBuild>().WithMany().HasForeignKey(item => item.BuildId).OnDelete(DeleteBehavior.Cascade);
+            entity.ToTable("UnityBuildLogs");
         });
     }
 }

@@ -34,6 +34,8 @@ builder.Services.AddScoped<CatalogService>();
 builder.Services.AddScoped<RunService>();
 builder.Services.AddSingleton<RunMonitor>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<RunMonitor>());
+builder.Services.AddSingleton<BuildExecutionService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<BuildExecutionService>());
 builder.Services.AddRateLimiter(options => {
     options.RejectionStatusCode = 429;
     options.AddPolicy("pair", context => RateLimitPartition.GetFixedWindowLimiter(

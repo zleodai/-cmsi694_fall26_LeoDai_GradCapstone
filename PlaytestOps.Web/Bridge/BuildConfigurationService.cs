@@ -19,6 +19,7 @@ public sealed record BuildConfigurationField
 public sealed record BuildConfigurationSnapshot
 {
     public required int ProtocolVersion { get; init; }
+    public bool BuildExecutionSupported { get; init; }
     public required string CapturedAtUtc { get; init; }
     public required string Revision { get; init; }
     public required string State { get; init; }

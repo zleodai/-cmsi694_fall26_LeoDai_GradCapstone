@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -25,6 +26,8 @@ namespace PlaytestOps.Editor
         private static string runProbeId;
         private static int generation;
         private static ClientWebSocket sourceBusyConnection;
+        private sealed class DeferredBuildMessage { public ClientWebSocket connection; public string json; }
+        private static readonly ConcurrentQueue<DeferredBuildMessage> DeferredBuildMessages = new ConcurrentQueue<DeferredBuildMessage>();
         private static ClientWebSocket versionControlBusyConnection;
         private static CancellationTokenSource versionControlReading;
         public static event Action Changed;
@@ -40,7 +43,7 @@ namespace PlaytestOps.Editor
         [Serializable] private sealed class ProjectIdentity { public string projectId; }
         [Serializable] private sealed class PairInput { public string code; public string projectId; public string projectName; public string unityVersion; }
         [Serializable] private sealed class PairOutput { public string token = ""; public string expiresAt = ""; }
-        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; public int offset; public string scope = ""; public string revision = ""; public string settingId = ""; public string value = ""; }
+        [Serializable] private sealed class Envelope { public string type = ""; public string requestId = ""; public string error = ""; public int count = 0; public string runId; public string mode; public string uniqueName; public int sequence; public string path; public int offset; public string scope = ""; public string revision = ""; public string settingId = ""; public string value = ""; public string buildId = ""; public string buildToken = ""; }
         [Serializable] private sealed class VersionControlMessage
         {
             public string type = "vcs.snapshot.result", requestId = "";
@@ -187,6 +190,7 @@ namespace PlaytestOps.Editor
                         if (ready?.type != "session.ready") throw new InvalidOperationException("Unexpected server handshake.");
                         failures = 0; Status = "Connected"; Error = null; needsDiscovery = true;
                         Notify();
+                        StartBuildDelivery(connection, currentGeneration, credentials.address, ct);
                         foreach (var pendingRun in outbox.items.ToArray()) PublishRun(pendingRun);
                         DiscoverWhenReady();
                         while (connection.State == WebSocketState.Open && !ct.IsCancellationRequested)
@@ -214,6 +218,8 @@ namespace PlaytestOps.Editor
                                 ReplyVersionControl(message, connection, currentGeneration, ct);
                             else if (message.type == "build.settings.get" || message.type == "build.settings.set")
                                 ReplyBuildSettings(message, connection, currentGeneration, ct);
+                            else if (message.type == "build.request")
+                                WindowsBuildExecution.Request(message.buildId, message.buildToken, message.revision, credentials.address);
                             else if (message.type == "run.accepted")
                             {
                                 outbox.items.RemoveAll(x => x.runId == message.runId && x.sequence <= message.sequence);
@@ -231,7 +237,7 @@ namespace PlaytestOps.Editor
                         if (++failures >= 3) throw new InvalidOperationException("Connection lost. Check the server and pair again if it restarted.");
                         Error = "Connection interrupted; retrying shortly."; Status = "Reconnecting"; Notify();
                     }
-                    finally { ClearRunProbe(); CancelVersionControl(connection); if (ReferenceEquals(socket, connection)) socket = null; }
+                    finally { CancelBuildDelivery(); ClearRunProbe(); CancelVersionControl(connection); if (ReferenceEquals(socket, connection)) socket = null; }
                 }
                 await Task.Delay(TimeSpan.FromSeconds(failures * 3), ct);
             }
@@ -247,7 +253,7 @@ namespace PlaytestOps.Editor
         {
             if (!Connected) { ClearRunProbe(); return; }
             // Check after PlayMode exit and settings restoration, not merely RunFinished.
-            if (PlaytestSession.Busy || EditorApplication.isPlayingOrWillChangePlaymode ||
+            if (PlaytestSession.Busy || WindowsBuildExecution.Busy || EditorApplication.isPlayingOrWillChangePlaymode ||
                 EditorApplication.isCompiling || EditorApplication.isUpdating) return;
             DiscoverWhenReady();
             if (needsDiscovery || PlaytestSession.Busy || outbox.items.Count > 0) return;
@@ -268,7 +274,7 @@ namespace PlaytestOps.Editor
 
         private static void DiscoverWhenReady()
         {
-            if (!Connected || !needsDiscovery || PlaytestSession.Busy || EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            if (!Connected || !needsDiscovery || PlaytestSession.Busy || WindowsBuildExecution.Busy || EditorApplication.isCompiling || EditorApplication.isUpdating) return;
             needsDiscovery = false;
             PlaytestSession.Discover();
         }
@@ -398,7 +404,7 @@ namespace PlaytestOps.Editor
             ? (object)new SourceListMessage { requestId = request.requestId, error = message }
             : new SourceReadMessage { requestId = request.requestId, path = Clip(request.path, 512), error = message };
 
-        private static bool VersionControlEditorBusy => PlaytestSession.Busy || EditorApplication.isCompiling ||
+        private static bool VersionControlEditorBusy => PlaytestSession.Busy || WindowsBuildExecution.Busy || EditorApplication.isCompiling ||
             EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode;
 
         private static void CancelVersionControl(ClientWebSocket connection)
@@ -561,6 +567,7 @@ namespace PlaytestOps.Editor
 
         private static void Stop(bool clearError)
         {
+            CancelBuildDelivery();
             ++generation;
             ClearRunProbe();
             CancelVersionControl(versionControlBusyConnection);
@@ -573,6 +580,7 @@ namespace PlaytestOps.Editor
         }
         private static void StopForReload()
         {
+            CancelBuildDelivery();
             ++generation;
             ClearRunProbe();
             CancelVersionControl(versionControlBusyConnection);
@@ -583,18 +591,37 @@ namespace PlaytestOps.Editor
         private static void Notify() => Changed?.Invoke();
         private static async Task<string> Receive(ClientWebSocket connection, CancellationToken ct)
         {
+            while (true)
+            {
+            if (!WindowsBuildExecution.Busy)
+                while (DeferredBuildMessages.TryDequeue(out var deferred))
+                    if (ReferenceEquals(deferred.connection, connection)) return deferred.json;
             using (var stream = new MemoryStream())
             {
                 var buffer = new byte[4096]; WebSocketReceiveResult read;
                 do
                 {
-                    read = await connection.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                    read = await connection.ReceiveAsync(new ArraySegment<byte>(buffer), ct).ConfigureAwait(false);
                     if (read.MessageType == WebSocketMessageType.Close) return null;
                     if (read.MessageType != WebSocketMessageType.Text || stream.Length + read.Count > 65536)
                         throw new InvalidOperationException("Invalid server message.");
                     stream.Write(buffer, 0, read.Count);
                 } while (!read.EndOfMessage);
-                return Encoding.UTF8.GetString(stream.ToArray());
+                var json = Encoding.UTF8.GetString(stream.ToArray());
+                // Continue receiving acknowledgements on this worker even while a
+                // synchronous BuildPipeline call blocks the Unity main thread.
+                if (WindowsBuildExecution.Accept(json)) continue;
+                // A queued settings/source/test message must not stop the worker
+                // receiver and therefore block build-log acknowledgements. Execute
+                // only after the build yields the main thread, on the same socket.
+                if (WindowsBuildExecution.Busy)
+                {
+                    if (DeferredBuildMessages.Count >= 64) throw new InvalidOperationException("Too many deferred Editor messages during a build.");
+                    DeferredBuildMessages.Enqueue(new DeferredBuildMessage { connection = connection, json = json });
+                    continue;
+                }
+                return json;
+            }
             }
         }
     }

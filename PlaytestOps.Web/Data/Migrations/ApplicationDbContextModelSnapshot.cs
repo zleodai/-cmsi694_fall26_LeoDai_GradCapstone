@@ -345,6 +345,156 @@ namespace PlaytestOps.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("PlaytestOps.Web.Models.UnityBuild", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActiveTarget")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DroppedLogCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("DurationSeconds")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("ExecutablePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LastLogSequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastUpdateAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("LogsTruncated")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ManifestPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OutputPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProfilePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Revision")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TotalBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TotalErrors")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TotalLogCharacters")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TotalWarnings")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UnityVersion")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId")
+                        .IsUnique()
+                        .HasFilter("State IN ('Pending', 'Running', 'Unknown')");
+
+                    b.HasIndex("RequestKey")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "RequestedAt");
+
+                    b.ToTable("UnityBuilds", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_UnityBuilds_State", "State IN ('Pending', 'Running', 'Succeeded', 'Failed', 'Rejected', 'Unknown', 'Interrupted')");
+                        });
+                });
+
+            modelBuilder.Entity("PlaytestOps.Web.Models.UnityBuildLog", b =>
+                {
+                    b.Property<string>("BuildId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StackTrace")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TimestampUtc")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Truncated")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("BuildId", "Sequence");
+
+                    b.ToTable("UnityBuildLogs", (string)null);
+                });
+
             modelBuilder.Entity("PlaytestOps.Web.Models.UnityProject", b =>
                 {
                     b.Property<string>("Id")
@@ -436,6 +586,15 @@ namespace PlaytestOps.Web.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Playtest");
+                });
+
+            modelBuilder.Entity("PlaytestOps.Web.Models.UnityBuildLog", b =>
+                {
+                    b.HasOne("PlaytestOps.Web.Models.UnityBuild", null)
+                        .WithMany()
+                        .HasForeignKey("BuildId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("PlaytestOps.Web.Models.Playtest", b =>

@@ -24,6 +24,8 @@ public sealed class RunService(ApplicationDbContext db, BridgeRegistry registry,
                 return new(null, "This test is unavailable or cannot run. Refresh discovery in Unity.");
             var session = registry.ProjectSession(test.ProjectId);
             if (session is null) return new(null, "Connect the project's Unity Editor before queueing a test.");
+            if (await db.UnityBuilds.AnyAsync(build => build.ProjectId == test.ProjectId && (build.State == "Pending" || build.State == "Running" || build.State == "Unknown"), ct))
+                return new(null, "A build is active or its result is unknown. Finish or resolve it before queueing tests.");
             var existing = await db.PlaytestRuns.FirstOrDefaultAsync(x => x.PlaytestId == testId &&
                 (x.State == "Queued" || x.State == "Pending" || x.State == "Running"), ct);
             if (existing is not null) return new(existing.Id, "This test is already queued or running.");
