@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="PlaytestOps.Web/PlaytestOps.Web.csproj" />
+  <Project Path="Tools/SandboxieLauncher/SandboxieLauncher.csproj" />
 </Solution>

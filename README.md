@@ -17,3 +17,7 @@ See [Windows build settings coverage, formats and safety](docs/windows-build-set
 **Builds** (`/Builds`, Editor package 0.5.0+) starts local Windows player builds with a fresh server-issued ID and a new `Builds/PlaytestOps/<id>/Player.exe` output. Build history and all captured debug/warning/error entries are persisted in SQLite and remain readable after disconnect/restart. A worker streams logs during Unity's synchronous build call. Each result retains an artifact manifest and executable SHA-256 on the Editor host; it does not launch the player or deploy remotely.
 
 See [Windows build execution and recovery](docs/windows-build-execution.md) for profile fidelity, output ownership, bounds, unknown-result recovery and proof boundaries. Apply EF migrations before production startup; Development startup migrates automatically.
+
+## Local Steam sessions (LDAI-34)
+
+The [Sandboxie launcher](Tools/SandboxieLauncher/README.md) launches an existing Windows game build with preconfigured, independently signed-in Steam sessions. It provides explicit sandbox selection, Steam readiness checks and receipt-based game cleanup. Sandbox installation, account sign-in, transport discovery and multiplayer lobby automation are separate steps.
