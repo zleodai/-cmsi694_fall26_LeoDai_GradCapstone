@@ -25,13 +25,15 @@
             text("build-duration", Number(build.durationSeconds).toFixed(1)); text("build-counts", build.totalWarnings + " / " + build.totalErrors); text("build-bytes", build.totalBytes);
             text("build-output", build.outputPath); text("build-executable", build.executablePath); text("build-manifest", build.manifestPath);
             document.getElementById("build-unknown-actions").hidden = build.state !== "Unknown";
+            const deleteActions = document.getElementById("build-delete-actions");
+            if (deleteActions) deleteActions.hidden = !["Succeeded", "Failed", "Rejected", "Interrupted"].includes(build.state);
             const truncation = document.getElementById("build-truncation"); truncation.hidden = !build.logsTruncated; truncation.querySelector("span").textContent = String(build.droppedLogCount);
             for (const log of data.logs) {
                 if (log.sequence <= after) continue;
                 if (log.sequence !== after + 1) throw new Error("Build log gap");
                 const pre = document.createElement("pre"); pre.className = "text-wrap border-top pt-2 build-log-entry";
                 pre.dataset.level = log.level; pre.dataset.sequence = String(log.sequence);
-                pre.textContent = `[${log.sequence}] ${log.timestampUtc} ${log.level}${log.truncated ? " [TRUNCATED]" : ""}\n${log.message}\n${log.stackTrace}`;
+                pre.textContent = `[${log.sequence}] ${window.PlaytestOpsTime.formatUtc(log.timestampUtc, true)} ${log.level}${log.truncated ? " [TRUNCATED]" : ""}\n${log.message}\n${log.stackTrace}`;
                 logs.appendChild(pre); after = log.sequence;
             }
             logs.dataset.lastSequence = String(after); filter();

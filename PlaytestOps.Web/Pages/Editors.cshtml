@@ -4,10 +4,13 @@
 <h1>Unity Editors</h1>
 <p><a asp-page="/Index">View tests</a> · <a asp-page="/Editors">Refresh connections</a></p>
 <p>Generate a code here, then enter this dashboard's address and the code in Unity's PlaytestOps window.</p>
+<p>One Unity Editor can be connected to this dashboard server at a time. All browser tabs share that Editor for live queries. Disconnect it before connecting a different Editor; saved tests, builds and logs are kept.</p>
+<p>Disconnecting does not cancel a build or playtest already running in Unity.</p>
+@if (Model.Error is not null) { <div class="empty-state load-error" role="alert">@Model.Error</div> }
 @if (Model.CanPair)
 {
     <form method="post" asp-page-handler="PairingCode">
-        <button type="submit" class="btn btn-primary">Generate pairing code</button>
+        <button type="submit" class="btn btn-primary" disabled="@(Model.ConnectedEditor is not null)">Generate pairing code</button>
     </form>
 }
 else
@@ -21,7 +24,7 @@ else
         <p>Single use. Expires at @Model.ExpiresAt?.ToString("HH:mm:ss 'UTC'").</p>
     </div>
 }
-<h2 class="mt-4">Paired Editors</h2>
+<h2 class="mt-4">Editor connections</h2>
 @if (Model.Sessions.Count == 0) { <p>No paired Editors yet.</p> }
 @foreach (var session in Model.Sessions)
 {
@@ -29,6 +32,13 @@ else
         <h3>@session.ProjectName</h3>
         <p><strong>@(session.Connected ? "Connected" : "Disconnected")</strong> · Unity @session.UnityVersion</p>
         <p>Project: <code>@session.ProjectId</code></p>
+        @if (session.Connected && Model.CanPair)
+        {
+            <form method="post" asp-page-handler="Disconnect">
+                <input type="hidden" name="sessionId" value="@session.SessionId" />
+                <button type="submit" class="btn btn-outline-warning">Disconnect Editor</button>
+            </form>
+        }
     </article>
 }
 <p>Test discovery synchronizes saved tests. Use Queue test on the dashboard. Queue positions and results update while work is active. Server restarts require pairing again.</p>

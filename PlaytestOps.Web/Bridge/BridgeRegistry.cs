@@ -26,6 +26,7 @@ public sealed class EditorSession
 // Credentials deliberately live only in memory. A server restart requires pairing again.
 public sealed class BridgeRegistry
 {
+    public const string SingleEditorMessage = "This dashboard is already connected to a Unity Editor. Disconnect it on the Editors page before connecting another.";
     private readonly object gate = new();
     private readonly Dictionary<string, DateTimeOffset> codes = new();
     private readonly Dictionary<string, EditorSession> sessions = new();
@@ -48,14 +49,25 @@ public sealed class BridgeRegistry
         }
     }
 
-    public PairResponse? Pair(PairRequest request)
+    public PairResponse? Pair(PairRequest request) => Pair(request, out _);
+
+    public PairResponse? Pair(PairRequest request, out bool editorAlreadyConnected)
     {
         lock (gate)
         {
+            editorAlreadyConnected = false;
             Prune();
-            if (!codes.Remove(request.Code.Trim().ToUpperInvariant(), out var expires) || expires <= DateTimeOffset.UtcNow)
+            var code = request.Code.Trim().ToUpperInvariant();
+            if (!codes.TryGetValue(code, out var expires) || expires <= DateTimeOffset.UtcNow)
                 return null;
-            // A project has one paired Editor in this first version.
+            // Do not consume the code or disturb the current Editor on a conflict.
+            if (sessions.Values.Any(IsOpen))
+            {
+                editorAlreadyConnected = true;
+                return null;
+            }
+            codes.Remove(code);
+            // Replace only this project's disconnected credentials; history is stored separately.
             foreach (var entry in sessions.Where(x => x.Value.ProjectId == request.ProjectId).ToArray())
             {
                 entry.Value.Socket?.Abort();
@@ -87,7 +99,8 @@ public sealed class BridgeRegistry
     {
         lock (gate)
         {
-            if (!sessions.Values.Contains(session) || session.ExpiresAt <= DateTimeOffset.UtcNow) return false;
+            Prune();
+            if (!CanAttachLocked(session)) return false;
             // A restored domain can reconnect before the server notices the old socket died.
             session.Socket?.Abort();
             session.Socket = socket;
@@ -96,6 +109,22 @@ public sealed class BridgeRegistry
             session.LastConnectedAt = DateTimeOffset.UtcNow;
             return true;
         }
+    }
+
+    public bool CanAttach(EditorSession session)
+    {
+        lock (gate) { Prune(); return CanAttachLocked(session); }
+    }
+
+    private bool CanAttachLocked(EditorSession session) => sessions.Values.Contains(session)
+        && session.ExpiresAt > DateTimeOffset.UtcNow
+        && !sessions.Values.Any(other => !ReferenceEquals(other, session) && IsOpen(other));
+
+    private static bool IsOpen(EditorSession session) => session.Socket?.State == WebSocketState.Open;
+
+    public EditorSession? ConnectedEditor()
+    {
+        lock (gate) { Prune(); return sessions.Values.FirstOrDefault(IsOpen); }
     }
 
     public void Detach(EditorSession session, WebSocket socket)

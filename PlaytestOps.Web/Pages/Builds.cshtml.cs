@@ -28,6 +28,12 @@ public sealed class BuildsModel(BridgeRegistry registry, IProjectBuildConfigurat
         if (SelectedProject is not null)
         {
             var result = await configuration.GetAsync(SelectedProject.ProjectId, cancellationToken);
+            if (registry.ConnectedProject(SelectedProject.ProjectId)?.Id != SelectedProject.SessionId)
+            {
+                Error = "The Editor connection changed while loading. Refresh to use the current Editor.";
+                SelectedProject = null;
+                return Page();
+            }
             Configuration = result.Snapshot; Error = result.Error;
             Held = await db.UnityBuilds.AnyAsync(item => item.ProjectId == SelectedProject.ProjectId && (item.State == "Pending" || item.State == "Running" || item.State == "Unknown"), cancellationToken);
             if (Configuration is { State: "available", BuildExecutionSupported: true } snapshot && snapshot.Fields.Any(field => field.Editable)) RequestKey = builds.IssueRequestKey(SelectedProject.ProjectId, SelectedProject.SessionId, snapshot.Revision);
@@ -51,5 +57,7 @@ public sealed class BuildsModel(BridgeRegistry registry, IProjectBuildConfigurat
         Projects = registry.List().Where(item => item.Connected).OrderBy(item => item.ProjectName).ThenBy(item => item.ProjectId).ToArray();
         SelectedProjectId = string.IsNullOrEmpty(projectId) && Projects.Count == 1 ? Projects[0].ProjectId : projectId;
         SelectedProject = Projects.FirstOrDefault(item => item.ProjectId == SelectedProjectId);
+        if (!string.IsNullOrEmpty(SelectedProjectId) && SelectedProject is null)
+            Error = "The requested Unity Editor is not connected. Only its saved build history is shown; use the current Editor for live build controls.";
     }
 }

@@ -76,9 +76,60 @@ try
     var credential = JsonDocument.Parse(await paired.Content.ReadAsStringAsync()).RootElement.GetProperty("token").GetString()!;
     Check((await client.PostAsJsonAsync("/api/editor/pair", Pair(code))).StatusCode == HttpStatusCode.Unauthorized, "pairing code cannot be reused");
     Check((await client.GetAsync("/api/editor/connect")).StatusCode == HttpStatusCode.Unauthorized, "socket endpoint requires credentials");
+    async Task<string> NewCode()
+    {
+        var page = await client.GetStringAsync("/Editors");
+        var token = Regex.Match(page, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
+        var response = await client.PostAsync("/Editors?handler=PairingCode", new FormUrlEncodedContent(new Dictionary<string,string>{{"__RequestVerificationToken", token}}));
+        response.EnsureSuccessStatusCode();
+        return Regex.Match(await response.Content.ReadAsStringAsync(), "id=\"pairing-code\">([^<]+)").Groups[1].Value;
+    }
+    async Task<ClientWebSocket> Connect(string token)
+    {
+        var connection = new ClientWebSocket();
+        connection.Options.SetRequestHeader("Authorization", "Bearer " + token);
+        await connection.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
+        if ((await Receive(connection)).GetProperty("type").GetString() != "session.ready")
+            throw new Exception("Editor fixture did not receive its handshake.");
+        return connection;
+    }
+    async Task Drop(ClientWebSocket connection)
+    {
+        connection.Abort();
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            if (!(await client.GetStringAsync("/Editors")).Contains("<strong>Connected</strong>")) return;
+            await Task.Delay(100);
+        }
+        throw new Exception("Server did not observe the fixture socket disconnect.");
+    }
+    async Task ConnectionConflict(string token, string reason)
+    {
+        // Send a genuine WebSocket upgrade so the pre-upgrade conflict has an observable HTTP status.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/editor/connect");
+        request.Headers.Authorization = new("Bearer", token);
+        request.Headers.TryAddWithoutValidation("Connection", "Upgrade");
+        request.Headers.TryAddWithoutValidation("Upgrade", "websocket");
+        request.Headers.TryAddWithoutValidation("Sec-WebSocket-Version", "13");
+        request.Headers.TryAddWithoutValidation("Sec-WebSocket-Key", Convert.ToBase64String(Guid.NewGuid().ToByteArray()));
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Check(response.StatusCode == HttpStatusCode.Conflict, reason);
+    }
+    var otherProjectId = Guid.NewGuid().ToString("N");
+    var otherPair = await client.PostAsJsonAsync("/api/editor/pair", new { code = await NewCode(), projectId = otherProjectId, projectName = "Other project", unityVersion = "6000.6.0f1" });
+    Check(otherPair.IsSuccessStatusCode, "different projects may be paired before either socket connects");
+    var otherCredential = JsonDocument.Parse(await otherPair.Content.ReadAsStringAsync()).RootElement.GetProperty("token").GetString()!;
+    var heldCode = await NewCode();
     using var initialSocket = new ClientWebSocket(); var socket = initialSocket; socket.Options.SetRequestHeader("Authorization", "Bearer " + credential);
     await socket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
     Check((await Receive(socket)).GetProperty("type").GetString() == "session.ready", "authenticated socket receives ready handshake");
+    Check((await client.PostAsJsonAsync("/api/editor/pair", new { code = heldCode, projectId = otherProjectId, projectName = "Other project", unityVersion = "6000.6.0f1" })).StatusCode == HttpStatusCode.Conflict,
+        "another project cannot pair while an Editor is active");
+    Check((await client.PostAsJsonAsync("/api/editor/pair", Pair(heldCode))).StatusCode == HttpStatusCode.Conflict,
+        "same-project pairing cannot replace an active Editor session");
+    await ConnectionConflict(otherCredential, "a pre-paired second Editor cannot attach while another is active");
+    Check(Regex.Matches(await client.GetStringAsync("/Editors"), "<strong>Connected</strong>").Count == 1,
+        "rejected pairing and socket attempts leave exactly the original Editor connected");
     var cases = new[] { new { uniqueName = "Checks/One", fullName = "Checks.One", name = "One", description = "Placeholder check", assembly = "Checks", mode = "EditMode", runState = "Runnable", skipReason = "" },
         new { uniqueName = "Checks/Two", fullName = "Checks.Two", name = "Two", description = "Placeholder check", assembly = "Checks", mode = "PlayMode", runState = "Explicit", skipReason = "Selected only" } };
     object Catalog(object tests) => new { type = "catalog.replace", requestId = "check", tests };
@@ -122,18 +173,16 @@ try
     Check((await (await Run(id)).Content.ReadAsStringAsync()).Contains("already queued or running"), "duplicate queued/running test request rejected");
     Check(Scalar("SELECT COUNT(*) FROM PlaytestRuns") == 1, "busy request does not create another attempt");
     Check((await Send(socket, Update(Guid.NewGuid().ToString("N"), 1, "Passed", "Passed"))).GetProperty("type").GetString() == "error", "unknown run result rejected");
-    var otherCodePage = await client.PostAsync("/Editors?handler=PairingCode", new FormUrlEncodedContent(new Dictionary<string,string>{{"__RequestVerificationToken", anti}}));
-    var otherCode = Regex.Match(await otherCodePage.Content.ReadAsStringAsync(), "id=\"pairing-code\">([^<]+)").Groups[1].Value;
-    var otherPair = await client.PostAsJsonAsync("/api/editor/pair", new { code = otherCode, projectId = Guid.NewGuid().ToString("N"), projectName = "Other project", unityVersion = "6000.6.0f1" });
-    var otherCredential = JsonDocument.Parse(await otherPair.Content.ReadAsStringAsync()).RootElement.GetProperty("token").GetString()!;
-    using (var otherSocket = new ClientWebSocket())
+    await Drop(socket);
+    var heldPair = await client.PostAsJsonAsync("/api/editor/pair", new { code = heldCode, projectId = Guid.NewGuid().ToString("N"), projectName = "Code preservation check", unityVersion = "6000.6.0f1" });
+    Check(heldPair.IsSuccessStatusCode, "active-Editor pairing conflicts do not consume a valid pairing code");
+    using (var otherSocket = await Connect(otherCredential))
     {
-        otherSocket.Options.SetRequestHeader("Authorization", "Bearer " + otherCredential);
-        await otherSocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
-        await Receive(otherSocket);
         Check((await Send(otherSocket, Update(runId, 1, "Passed", "Passed"))).GetProperty("type").GetString() == "error", "a different paired project cannot report this run");
-        otherSocket.Abort();
+        await Drop(otherSocket);
     }
+    using var afterForeignSocket = await Connect(credential);
+    socket = afterForeignSocket;
     Check((await Send(socket, Update(runId, 1, "Failed", "Failed", new string('x', 16001)))).GetProperty("type").GetString() == "error", "oversized result rejected without mutation");
     using (var remoteHost = new HttpRequestMessage(HttpMethod.Post, "/?handler=Run"))
     {
@@ -171,9 +220,10 @@ try
     await Send(socket, Update(runId, 1, "Running"));
     using var resumedSocket = new ClientWebSocket();
     resumedSocket.Options.SetRequestHeader("Authorization", "Bearer " + credential);
-    socket.Abort();
     await resumedSocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
-    await Receive(resumedSocket);
+    Check((await Receive(resumedSocket)).GetProperty("type").GetString() == "session.ready" &&
+        Regex.Matches(await client.GetStringAsync("/Editors"), "<strong>Connected</strong>").Count == 1,
+        "same-session reconnect replaces its old socket without admitting a second Editor");
     socket = resumedSocket;
     Check((await Send(socket, Update(runId, 2, "Passed", "Passed"))).GetProperty("type").GetString() == "run.accepted", "reconnected Editor can complete its active run");
     // Structured log snapshots use a separate attempt and only this disposable database.
@@ -188,16 +238,16 @@ try
         LogEntry(1, "Debug", "LOG-DEBUG <script>alert('log')</script> & debug", "<debug-stack>"),
         LogEntry(2, "Warning", "LOG-WARNING connection warning"),
         LogEntry(3, "Error", "LOG-ERROR expected smoke error", "at <error-stack>") };
-    using (var otherSocket = new ClientWebSocket())
+    await Drop(socket);
+    using (var otherSocket = await Connect(otherCredential))
     {
-        otherSocket.Options.SetRequestHeader("Authorization", "Bearer " + otherCredential);
-        await otherSocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
-        await Receive(otherSocket);
         Check((await Send(otherSocket, LogUpdate(1, initialLogs))).GetProperty("type").GetString() == "error" &&
             Scalar("SELECT Sequence FROM PlaytestRuns WHERE Id='" + loggedRunId + "'") == 0,
             "foreign Editor cannot inject structured logs into another project's attempt");
-        otherSocket.Abort();
+        await Drop(otherSocket);
     }
+    using var afterForeignLogSocket = await Connect(credential);
+    socket = afterForeignLogSocket;
     Check((await Send(socket, LogUpdate(1, initialLogs))).GetProperty("type").GetString() == "run.accepted", "structured debug, warning, and error snapshot acknowledged");
     var initialLogJson = TextScalar("SELECT LogsJson FROM PlaytestRuns WHERE Id='" + loggedRunId + "'");
     using (var persisted = JsonDocument.Parse(initialLogJson))
@@ -379,12 +429,7 @@ try
     }
     async Task<ClientWebSocket> ConnectVisibilityProject(string visibilityCredential)
     {
-        var visibilitySocket = new ClientWebSocket();
-        visibilitySocket.Options.SetRequestHeader("Authorization", "Bearer " + visibilityCredential);
-        await visibilitySocket.ConnectAsync(new Uri("ws://127.0.0.1:5291/api/editor/connect"), CancellationToken.None);
-        var ready = await Receive(visibilitySocket);
-        if (ready.GetProperty("type").GetString() != "session.ready") throw new Exception("Visibility fixture socket did not receive its handshake.");
-        return visibilitySocket;
+        return await Connect(visibilityCredential);
     }
     async Task<string> WaitForView(Func<string, bool> expected)
     {
@@ -399,6 +444,14 @@ try
     html = await client.GetStringAsync("/");
     Check(html.Contains("No Unity Editor connected.") && !html.Contains("No tests discovered."), "no connected Editor has a distinct dashboard empty state");
     var visibilityCredential = await PairVisibilityProject(projectId, "Connection checks");
+    var staleVisibilityCredential = visibilityCredential;
+    visibilityCredential = await PairVisibilityProject(projectId, "Connection checks");
+    using (var staleCredential = new HttpRequestMessage(HttpMethod.Get, "/api/editor/connect"))
+    {
+        staleCredential.Headers.Authorization = new("Bearer", staleVisibilityCredential);
+        Check((await client.SendAsync(staleCredential)).StatusCode == HttpStatusCode.Unauthorized,
+            "re-pairing a disconnected project revokes its previous credentials");
+    }
     Check((await client.GetStringAsync("/Editors")).Contains("<strong>Disconnected</strong>") &&
         !(await client.GetStringAsync("/")).Contains(RowMarker(id)), "paired Editor without an active socket does not expose its saved catalog");
     var storedStatus = Scalar("SELECT Status FROM Playtests WHERE Id=" + id);
@@ -435,14 +488,45 @@ try
     html = await client.GetStringAsync("/");
     Check(html.Contains(RowMarker(alternateId)) && !html.Contains(RowMarker(id)) && !html.Contains(RowMarker(secondId)),
         "a different connected project's catalog does not reveal a paired-disconnected project's tests");
+    await ConnectionConflict(visibilityCredential, "a second paired Editor cannot displace the selected live project");
+    html = await client.GetStringAsync("/");
+    Check(!html.Contains(RowMarker(id)) && !html.Contains(RowMarker(secondId)) && html.Contains(RowMarker(alternateId)),
+        "rejected second attachment preserves the current project's catalog without a union");
+    var editorsPage = await client.GetStringAsync("/Editors");
+    var disconnectAnti = Regex.Match(editorsPage, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
+    var alternateSessionId = Regex.Match(editorsPage, "name=\"sessionId\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
+    Check(alternateSessionId.Length == 32 && editorsPage.Contains("Disconnect Editor"), "Editors page offers a disconnect form tied to the exact active session");
+    async Task<HttpResponseMessage> DashboardDisconnect(string sessionId, string? token = null, string? host = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/Editors?handler=Disconnect");
+        if (host is not null) request.Headers.Host = host;
+        var fields = new Dictionary<string,string> { ["sessionId"] = sessionId };
+        if (token is not null) fields["__RequestVerificationToken"] = token;
+        request.Content = new FormUrlEncodedContent(fields);
+        return await client.SendAsync(request);
+    }
+    Check((await DashboardDisconnect(alternateSessionId)).StatusCode == HttpStatusCode.BadRequest,
+        "dashboard disconnect rejects missing antiforgery credentials");
+    Check((await DashboardDisconnect(alternateSessionId, disconnectAnti, "example.com")).StatusCode == HttpStatusCode.Forbidden,
+        "dashboard disconnect rejects a non-local Host");
+    Check((await DashboardDisconnect(Guid.NewGuid().ToString("N"), disconnectAnti)).StatusCode == HttpStatusCode.Conflict &&
+        (await client.GetStringAsync("/")).Contains(RowMarker(alternateId)), "stale disconnect target cannot remove the current Editor");
+    Check((await DashboardDisconnect(alternateSessionId, disconnectAnti)).IsSuccessStatusCode,
+        "local antiforgery-protected dashboard action disconnects its exact Editor");
+    await WaitForView(view => !view.Contains(RowMarker(alternateId)));
+    using (var revokedAlternate = new HttpRequestMessage(HttpMethod.Get, "/api/editor/connect"))
+    {
+        revokedAlternate.Headers.Authorization = new("Bearer", alternateCredential);
+        Check((await client.SendAsync(revokedAlternate)).StatusCode == HttpStatusCode.Unauthorized,
+            "dashboard disconnect revokes the old Editor's reconnect credentials");
+    }
     using var reconnectedVisibilitySocket = await ConnectVisibilityProject(visibilityCredential);
     html = await client.GetStringAsync("/");
-    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && html.Contains(RowMarker(alternateId)),
-        "multiple active Unity Editors display the union of their project catalogs");
-    alternateSocket.Abort();
-    html = await WaitForView(view => !view.Contains(RowMarker(alternateId)));
-    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && Scalar("SELECT COUNT(*) FROM Playtests WHERE Id=" + alternateId) == 1,
-        "disconnecting one Editor hides only its rows and preserves the other connected catalog");
+    Check(html.Contains(RowMarker(id)) && html.Contains(RowMarker(secondId)) && !html.Contains(RowMarker(alternateId)) &&
+        Scalar("SELECT COUNT(*) FROM Playtests WHERE Id=" + alternateId) == 1,
+        "explicit switching reveals only the new active catalog while preserving the old project's stored tests");
+    Check((await DashboardDisconnect(alternateSessionId, disconnectAnti)).StatusCode == HttpStatusCode.Conflict &&
+        (await client.GetStringAsync("/")).Contains(RowMarker(id)), "replayed old disconnect form cannot revoke a newly connected Editor");
     using (var fragment = await client.GetAsync("/?handler=Tests"))
     {
         var fragmentHtml = await fragment.Content.ReadAsStringAsync();

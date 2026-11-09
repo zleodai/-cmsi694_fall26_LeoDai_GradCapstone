@@ -1,0 +1,71 @@
+@page "/Builds/{id}/Delete"
+@model DeleteBuildModel
+@using PlaytestOps.Web.Formatting
+@{
+    ViewData["Title"] = "Delete build";
+    var preview = Model.Preview;
+    var build = preview.Build;
+}
+<section class="dashboard-heading" aria-labelledby="delete-build-title">
+    <div>
+        <p><a asp-page="/BuildDetails" asp-route-id="@build.Id">← Build details and logs</a></p>
+        <h1 id="delete-build-title">Delete build</h1>
+        <p class="page-description">@build.ProjectName · <code class="text-break">@build.Id</code></p>
+    </div>
+</section>
+@if (Model.Error is not null)
+{
+    <div class="empty-state load-error mb-3" role="alert"><p class="mb-0">@Model.Error</p></div>
+}
+<section class="vcs-card" aria-labelledby="delete-build-summary-title">
+    <h2 id="delete-build-summary-title">Review this build</h2>
+    <dl class="vcs-workspace-metadata">
+        <div><dt>Build ID</dt><dd><code class="text-break">@build.Id</code></dd></div>
+        <div><dt>Project</dt><dd>@build.ProjectName</dd></div>
+        <div><dt>State / phase</dt><dd>@build.State · @build.Phase</dd></div>
+        <div><dt>Requested (Pacific)</dt><dd>@PacificTime.FormatUtc(build.RequestedAt)</dd></div>
+        <div><dt>Captured log entries</dt><dd>@preview.LogCount</dd></div>
+    </dl>
+    <h3>Recorded local output folder</h3>
+    <p><code id="delete-build-output" class="text-break">@(string.IsNullOrEmpty(build.OutputPath) ? "No output folder recorded." : build.OutputPath)</code></p>
+    <p><a asp-page="/BuildDetails" asp-page-handler="LogFile" asp-route-id="@build.Id">Download captured logs before deleting</a>. A download is not created automatically.</p>
+</section>
+@if (preview.BlockedReason is not null)
+{
+    <section class="vcs-card" aria-labelledby="delete-build-blocked-title">
+        <h2 id="delete-build-blocked-title">Deletion unavailable</h2>
+        <p class="source-notice" role="status">@preview.BlockedReason</p>
+        <p>Deleting a record does not cancel a Unity build or stop a player. Inspect the build and any streaming session before retrying.</p>
+        <div class="d-flex flex-wrap gap-3 align-items-center">
+            <a asp-page="/BuildDetails" asp-route-id="@build.Id" class="btn btn-outline-secondary">Back to build</a>
+            <a asp-page="/Streaming">Review streaming session</a>
+        </div>
+    </section>
+}
+else
+{
+    <section class="vcs-card" aria-labelledby="delete-build-confirm-title">
+        <h2 id="delete-build-confirm-title">Confirm deletion</h2>
+        <p id="delete-build-history-warning" class="source-notice"><strong>This cannot be undone from the dashboard.</strong> The build history entry and all @preview.LogCount captured log entries will be permanently removed from dashboard storage. Keeping the output folder does not keep the dashboard history or its captured logs.</p>
+        <form method="post" asp-route-id="@build.Id">
+            <div class="form-check mb-4">
+                <input id="delete-build-confirmed" class="form-check-input" type="checkbox" name="confirmed" value="true" required aria-describedby="delete-build-history-warning" />
+                <label for="delete-build-confirmed" class="form-check-label">I confirm deletion of build <code class="text-break">@build.Id</code>, its dashboard history, and its captured logs.</label>
+            </div>
+            <fieldset class="mb-4" aria-describedby="delete-build-files-warning delete-build-files-status">
+                <legend class="h3">Optional local output deletion</legend>
+                <div class="form-check mb-2">
+                    <input id="delete-build-files" class="form-check-input" type="checkbox" name="deleteFiles" value="true" disabled="@(!preview.CanDeleteFiles)" />
+                    <label for="delete-build-files" class="form-check-label">Also permanently delete this build's local output folder and all files inside it.</label>
+                </div>
+                <p id="delete-build-files-warning"><strong>Permanent local deletion: files do not go to the Recycle Bin.</strong> This applies only to the exact recorded output folder shown above. Leave this unchecked to keep those files. No Unity source-project files are selected by this option.</p>
+                <p id="delete-build-files-status" class="@(preview.CanDeleteFiles ? "page-description" : "source-notice")">@(preview.FileError ?? (preview.CanDeleteFiles ? "The folder is eligible for local deletion. Safety checks run again when you submit." : "Local output deletion is unavailable for this build."))</p>
+            </fieldset>
+            <p>Deletion safety is checked again on submission. Pending, running, unknown, or active-player builds cannot be deleted. An interrupted build may have its history removed, but its output files are retained because Unity may still be writing them.</p>
+            <div class="d-flex flex-wrap gap-3 align-items-center">
+                <a asp-page="/BuildDetails" asp-route-id="@build.Id" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-danger">Delete build history and captured logs</button>
+            </div>
+        </form>
+    </section>
+}
