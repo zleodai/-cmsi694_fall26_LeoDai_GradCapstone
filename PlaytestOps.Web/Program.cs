@@ -6,6 +6,7 @@ using PlaytestOps.Web.Bridge;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Net;
+using PlaytestOps.Web.Streaming;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,6 +24,8 @@ builder.Services.AddScoped<IPlaytestService, PlaytestService>();
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddRazorPages();
+builder.Services.AddAntiforgery(options => options.HeaderName = StreamingProtocol.AntiforgeryHeader);
+builder.Services.AddBuildStreaming();
 builder.Services.AddSingleton<BridgeRegistry>();
 builder.Services.AddSingleton<SourceService>();
 builder.Services.AddSingleton<IProjectSourceProvider>(provider => provider.GetRequiredService<SourceService>());
@@ -35,6 +38,7 @@ builder.Services.AddScoped<RunService>();
 builder.Services.AddSingleton<RunMonitor>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<RunMonitor>());
 builder.Services.AddSingleton<BuildExecutionService>();
+builder.Services.AddSingleton<BuildDeletionService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<BuildExecutionService>());
 builder.Services.AddRateLimiter(options => {
     options.RejectionStatusCode = 429;
@@ -60,8 +64,9 @@ else
 }
 
 // Local Editor clients can use loopback HTTP without trusting a development certificate.
-app.UseWhen(context => !(context.Request.Path.StartsWithSegments("/api/editor") &&
-    context.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip)), branch => branch.UseHttpsRedirection());
+app.UseWhen(context => !((context.Request.Path.StartsWithSegments("/api/editor") &&
+    context.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip)) ||
+    (context.Request.Path.StartsWithSegments("/api/streaming") && StreamingEndpoints.IsLocalRequest(context))), branch => branch.UseHttpsRedirection());
 
 app.UseRouting();
 
@@ -69,6 +74,7 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(20) });
 app.MapEditorBridge();
+app.MapBuildStreaming();
 
 app.MapStaticAssets();
 app.MapRazorPages()

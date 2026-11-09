@@ -1,6 +1,6 @@
 {
   "name": "com.playtestops.editor",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "displayName": "PlaytestOps Editor",
   "description": "Editor-only playtests, dashboard synchronization, read-only UVCS, Windows build settings and preserved local player builds with live logs.",
   "unity": "6000.6",

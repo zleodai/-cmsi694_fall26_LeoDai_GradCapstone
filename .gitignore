@@ -40,6 +40,7 @@ coverage/
 *.sqlite3-wal
 *.sqlite3-journal
 PlaytestOps.Web/output/
+/output/
 
 # Logs and temporary files
 *.log

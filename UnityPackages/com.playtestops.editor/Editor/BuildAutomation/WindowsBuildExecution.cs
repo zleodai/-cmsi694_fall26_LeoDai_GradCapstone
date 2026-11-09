@@ -206,7 +206,7 @@ namespace PlaytestOps.Editor
                 var files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories).Where(path => Path.GetFileName(path) != ".playtestops-build").Take(10001).ToArray();
                 manifest.artifactListTruncated = files.Length > 10000;
                 manifest.artifacts = files.Take(10000).Select(path => new BuildArtifact { path = path.Substring(output.Length + 1).Replace('\\', '/'), bytes = new FileInfo(path).Length,
-                    sha256 = path == local.job.executablePath ? FileHash(path) : "" }).ToArray();
+                    sha256 = path == local.job.executablePath || IsStreamingIdentityArtifact(path) ? FileHash(path) : "" }).ToArray();
                 using (var file = new FileStream(local.job.manifestPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
                 using (var writer = new StreamWriter(file, new UTF8Encoding(false))) writer.Write(JsonUtility.ToJson(manifest, true));
                 lock (Gate)
@@ -444,6 +444,22 @@ namespace PlaytestOps.Editor
             if (text.Length <= maximum) return text;
             var count = maximum - 16; if (count > 0 && char.IsHighSurrogate(text[count - 1])) count--;
             return text.Substring(0, count) + "\n[truncated]";
+        }
+        private static bool IsStreamingIdentityArtifact(string path)
+        {
+            var name = Path.GetFileName(path);
+            return name.Equals("playtestops-streaming.json", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("steam_appid.txt", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("steam_api64.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("PlaytestOps.SteamMultiplayer.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("PlaytestOps.Arena.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("FizzySteamworks.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("com.rlabrecque.steamworks.net.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("PlaytestOps.Runtime.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Assembly-CSharp.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("GameAssembly.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("webrtc.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("UnityPlayer.dll", StringComparison.OrdinalIgnoreCase);
         }
         private static string FileHash(string path)
         {

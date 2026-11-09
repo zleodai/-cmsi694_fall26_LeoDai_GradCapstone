@@ -17,3 +17,7 @@ See [Windows build settings coverage, formats and safety](docs/windows-build-set
 **Builds** (`/Builds`, Editor package 0.5.0+) starts local Windows player builds with a fresh server-issued ID and a new `Builds/PlaytestOps/<id>/Player.exe` output. Build history and all captured debug/warning/error entries are persisted in SQLite and remain readable after disconnect/restart. A worker streams logs during Unity's synchronous build call. Each result retains an artifact manifest and executable SHA-256 on the Editor host; it does not launch the player or deploy remotely.
 
 See [Windows build execution and recovery](docs/windows-build-execution.md) for profile fidelity, output ownership, bounds, unknown-result recovery and proof boundaries. Apply EF migrations before production startup; Development startup migrates automatically.
+
+**Steam streaming** (`/Streaming`) can launch an approved Steam-capable build with the normal Steam session as host and selected Sandboxie clients. See [Steam streaming setup and use](docs/steam-streaming.md) for prerequisites, local path configuration and evidence limits.
+
+**KCP latency testing** (`/Streaming`) adds adjustable game-network delay during a local multiplayer session. Expand **Game network latency (KCP)** to apply an added RTT range or reset it, and view measured per-client game RTT. See [Local KCP latency inducer](docs/latency-inducer.md) for usage and validation results.

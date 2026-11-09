@@ -1,0 +1,157 @@
+@page "/Streaming"
+@model StreamingModel
+@{ ViewData["Title"] = "Live streaming"; }
+
+<div class="streaming-workspace">
+    <section class="dashboard-heading streaming-heading">
+        <div>
+            <h1>Live streaming</h1>
+            <p class="page-description">Watch local players together and choose which one to control.</p>
+        </div>
+    </section>
+
+    <form id="streaming-antiforgery" method="post" class="visually-hidden" aria-hidden="true">
+        @Html.AntiForgeryToken()
+    </form>
+
+    <div id="streaming-alert" class="streaming-alert" role="alert" hidden></div>
+
+    <details id="streaming-setup" class="streaming-controls streaming-details" open>
+        <summary>
+            <h2 id="streaming-setup-title">Session setup</h2>
+            <span class="streaming-muted">Build, players and capture</span>
+        </summary>
+        <div class="streaming-setup-content">
+            <div class="streaming-form-grid">
+                <div class="streaming-field streaming-build-field">
+                    <label for="streaming-build">Successful build</label>
+                    <select id="streaming-build" class="form-select" required>
+                        <option value="">Loading successful builds…</option>
+                    </select>
+                </div>
+                <div class="streaming-field streaming-instances-field">
+                    <label for="streaming-instance-count">Players</label>
+                    <select id="streaming-instance-count" class="form-select">
+                        <option value="1">Single</option>
+                        <option value="2">Host + 1 client</option>
+                        <option value="3">Host + 2 clients</option>
+                        <option value="4">Host + 3 clients</option>
+                    </select>
+                </div>
+                <div id="streaming-profile-field" class="streaming-field" hidden>
+                    <label for="streaming-profile">Play mode</label>
+                    <select id="streaming-profile" class="form-select"></select>
+                </div>
+                <div class="streaming-field">
+                    <label for="streaming-width">Capture width</label>
+                    <input id="streaming-width" class="form-control" type="number" min="320" max="1920" step="2" value="1280" inputmode="numeric" />
+                </div>
+                <div class="streaming-field">
+                    <label for="streaming-height">Capture height</label>
+                    <input id="streaming-height" class="form-control" type="number" min="180" max="1080" step="2" value="720" inputmode="numeric" />
+                </div>
+                <div class="streaming-field streaming-start-field">
+                    <span class="streaming-field-label">Build session</span>
+                    <button id="streaming-start" class="btn btn-primary" type="button" disabled>Start streams</button>
+                </div>
+            </div>
+            <p id="streaming-build-note" class="streaming-field-note" aria-live="polite"></p>
+            <fieldset id="streaming-steam-sandboxes" class="streaming-steam-sandboxes" hidden>
+                <legend>Sandbox clients</legend>
+                <p class="streaming-footnote">The normal Steam session runs the host. Choose one existing Sandboxie box for each client. This page does not sign in to Steam or change sandbox settings.</p>
+                <div id="streaming-steam-sandbox-options" class="streaming-steam-sandbox-options" role="group" aria-label="Available Sandboxie boxes"></div>
+                <p id="streaming-steam-sandbox-note" class="streaming-field-note" role="status"></p>
+            </fieldset>
+            <label class="streaming-diagnostics-toggle" for="streaming-diagnostics">
+                <input id="streaming-diagnostics" type="checkbox" aria-describedby="streaming-diagnostics-help" />
+                <span>Show the input-to-video marker in each player</span>
+            </label>
+            <p id="streaming-diagnostics-help" class="streaming-footnote">Enable before starting to measure input-to-video latency. Video fits each panel while retaining its native capture resolution.</p>
+        </div>
+    </details>
+
+    <section class="streaming-session" aria-labelledby="streaming-session-title">
+        <div class="streaming-section-heading">
+            <div class="streaming-session-heading">
+                <h2 id="streaming-session-title">Live players</h2>
+                <p id="streaming-session-summary" class="streaming-muted" role="status">No active build session.</p>
+            </div>
+            <div class="streaming-session-actions">
+                <button id="streaming-refresh" class="btn btn-outline-secondary" type="button">Refresh state</button>
+                <button id="streaming-connect" class="btn btn-outline-secondary" type="button" disabled>Connect viewers</button>
+                <button id="streaming-stop" class="btn btn-outline-warning" type="button" disabled>Stop session</button>
+            </div>
+        </div>
+
+        <div class="streaming-player-actions">
+            <p id="streaming-control-status" class="streaming-control-status" role="status">Click a player to control it. Press Escape to release control.</p>
+        </div>
+        <p id="streaming-manual-takeover" class="streaming-manual-takeover" role="status" hidden>Manual takeover active — input goes to the selected player.</p>
+
+        <details id="streaming-latency" class="streaming-latency streaming-details" aria-labelledby="streaming-latency-title" hidden>
+            <summary>
+                <h3 id="streaming-latency-title">Game network latency (KCP)</h3>
+                <span id="streaming-latency-summary" class="streaming-muted">Applied target: Waiting for a ready KCP group.</span>
+            </summary>
+            <div class="streaming-latency-content">
+                <div class="streaming-latency-heading">
+                    <div>
+                        <p class="streaming-footnote">Each remote client receives the selected added RTT, split between both directions. Measured RTT also includes the existing connection and game timing. The host’s local player has no simulated network latency.</p>
+                    </div>
+                    <div class="streaming-latency-actions">
+                        <button id="streaming-latency-apply" class="btn btn-primary" type="button" disabled>Apply</button>
+                        <button id="streaming-latency-reset" class="btn btn-outline-secondary" type="button" disabled>Reset</button>
+                    </div>
+                </div>
+                <fieldset class="streaming-latency-settings">
+                    <legend>Added game-network RTT (ms)</legend>
+                    <div class="streaming-latency-inputs">
+                        <div class="streaming-field">
+                            <label for="streaming-latency-min">Minimum</label>
+                            <input id="streaming-latency-min" class="form-control" type="number" min="0" max="1000" step="1" value="50" inputmode="numeric" />
+                        </div>
+                        <div class="streaming-field">
+                            <label for="streaming-latency-max">Maximum</label>
+                            <input id="streaming-latency-max" class="form-control" type="number" min="0" max="1000" step="1" value="100" inputmode="numeric" />
+                        </div>
+                    </div>
+                </fieldset>
+                <p id="streaming-latency-status" class="streaming-field-note" role="status" aria-live="polite">No pending update.</p>
+                <p id="streaming-latency-applied" class="streaming-field-note" role="status"><strong>Applied target:</strong> Waiting for a ready local KCP multiplayer session.</p>
+                <div id="streaming-latency-links" class="streaming-latency-links" aria-label="Per-client game-network RTT"></div>
+            </div>
+        </details>
+
+        <div id="streaming-no-streams" class="streaming-no-streams" role="status">
+            <span class="streaming-empty-mark" aria-hidden="true">▶</span>
+            <strong>Your player streams will appear here</strong>
+            <span>Choose a successful build and one to four players, then start the streams.</span>
+        </div>
+        <div id="streaming-tiles" class="streaming-tiles" aria-label="Live player streams"></div>
+    </section>
+
+    <div class="streaming-secondary-panels">
+        <details class="streaming-details streaming-activity">
+            <summary>Session activity</summary>
+            <ol id="streaming-log" class="streaming-log" aria-live="polite">
+                <li class="streaming-muted">No session activity yet.</li>
+            </ol>
+        </details>
+        <details class="streaming-details streaming-help">
+            <summary>Controls and diagnostics</summary>
+            <div class="streaming-help-content">
+                <p>Click a player's panel to control it. The mouse locks automatically when that game requests mouse look; lobbies and menus can keep a free cursor. Press <strong>Escape</strong> to release control and unlock the mouse, then click any panel to resume.</p>
+                <p>Use WASD, arrows, Space and Shift in the controlled video. The browser may request permission for mouse lock. Input is also released on focus loss, a hidden page, pointer-lock exit, disconnection or lease revocation.</p>
+                <p>Input RTT comes from acknowledged data-channel pings. Input-to-video time requires the visible marker and uses this browser's clock. Each stream captures the game framebuffer; no desktop capture or operating-system input is used.</p>
+            </div>
+        </details>
+    </div>
+</div>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/streaming.css" asp-append-version="true" />
+}
+@section Scripts {
+    <script src="~/js/streaming-input.js" asp-append-version="true"></script>
+    <script src="~/js/streaming.js" asp-append-version="true"></script>
+}

@@ -1,5 +1,7 @@
+@inject PlaytestOps.Web.Bridge.BridgeRegistry EditorRegistry
 @{
     var currentPage = ViewContext.RouteData.Values["page"] as string;
+    var connectedEditor = EditorRegistry.ConnectedEditor();
 }
 <!DOCTYPE html>
 <html lang="en" data-theme="dark" data-bs-theme="dark">
@@ -26,7 +28,8 @@
                     <a asp-page="/Scripts" aria-current="@(currentPage == "/Scripts" ? "page" : null)">Scripts</a>
                     <a asp-page="/VersionControl" aria-current="@(currentPage == "/VersionControl" ? "page" : null)">Version control</a>
                     <a asp-page="/BuildSettings" aria-current="@(currentPage == "/BuildSettings" ? "page" : null)">Build settings</a>
-                    <a asp-page="/Builds" aria-current="@(currentPage is "/Builds" or "/BuildDetails" ? "page" : null)">Builds</a>
+                    <a asp-page="/Builds" aria-current="@(currentPage is "/Builds" or "/BuildDetails" or "/DeleteBuild" ? "page" : null)">Builds</a>
+                    <a asp-page="/Streaming" aria-current="@(currentPage == "/Streaming" ? "page" : null)">Streaming</a>
                     <a asp-page="/Editors" aria-current="@(currentPage == "/Editors" ? "page" : null)">Editors</a>
                 </div>
                 <button id="theme-toggle" class="btn btn-outline-secondary theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true" hidden>
@@ -34,6 +37,11 @@
                 </button>
             </div>
         </nav>
+        <p id="dashboard-editor-context" class="page-description">
+            Active Editor:
+            <a asp-page="/Editors">@(connectedEditor is null ? "Not connected" : connectedEditor.ProjectName + " · " + connectedEditor.UnityVersion)</a>
+            · One connection shared by all dashboard tabs.
+        </p>
         <main role="main" class="pb-3">
             @RenderBody()
         </main>

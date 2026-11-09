@@ -125,7 +125,9 @@ namespace PlaytestOps.Editor
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidOperationException(response.StatusCode == System.Net.HttpStatusCode.Unauthorized
                             ? "Invalid or expired pairing code. Generate a new code in the dashboard."
-                            : "Pairing failed (HTTP " + (int)response.StatusCode + "). Check the dashboard address and try again.");
+                            : response.StatusCode == System.Net.HttpStatusCode.Conflict
+                                ? "This dashboard is already connected to a Unity Editor. Disconnect it on the dashboard Editors page before connecting another."
+                                : "Pairing failed (HTTP " + (int)response.StatusCode + "). Check the dashboard address and try again.");
                     var result = JsonUtility.FromJson<PairOutput>(json);
                     if (result == null || string.IsNullOrEmpty(result.token)) throw new InvalidOperationException("The server returned an invalid pairing response.");
                     ct.ThrowIfCancellationRequested();

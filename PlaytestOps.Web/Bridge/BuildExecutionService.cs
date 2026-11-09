@@ -66,6 +66,9 @@ public sealed class BuildExecutionService(IServiceScopeFactory scopes, BridgeReg
                 SessionId = session.Id, TokenHash = Hash(token), Revision = revision, UnityVersion = session.UnityVersion };
             db.UnityBuilds.Add(build);
             await db.SaveChangesAsync(ct); // Persist ownership before an execution command can leave the server.
+            // The persisted row supports idempotent retries. Consume the cached
+            // form now so deleting that row cannot make an old form valid again.
+            lock (gate) forms.Remove(requestKey);
             Wake();
             session.RunProbeId = null; session.RunReady = false;
             using var delivery = CancellationTokenSource.CreateLinkedTokenSource(ct);

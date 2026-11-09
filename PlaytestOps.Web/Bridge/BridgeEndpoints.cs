@@ -15,7 +15,8 @@ public static class BridgeEndpoints
                 string.IsNullOrWhiteSpace(request.ProjectName) || request.ProjectName.Length > 160 ||
                 string.IsNullOrWhiteSpace(request.UnityVersion) || request.UnityVersion.Length > 64)
                 return Results.BadRequest(new { error = "Invalid pairing fields." });
-            var result = registry.Pair(request);
+            var result = registry.Pair(request, out var editorAlreadyConnected);
+            if (editorAlreadyConnected) return Results.Conflict(new { error = BridgeRegistry.SingleEditorMessage });
             return result is null ? Results.Json(new { error = "Invalid or expired pairing code." }, statusCode: 401) : Results.Ok(result);
         }).RequireRateLimiting("pair");
 
@@ -37,14 +38,42 @@ public static class BridgeEndpoints
         // The protocol is for an Editor client, never cross-origin browser JavaScript.
         if (context.Request.Headers.ContainsKey("Origin")) { context.Response.StatusCode = 403; return; }
         if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
-        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        WebSocket? acceptedSocket = null;
         await registry.CatalogGate.WaitAsync(context.RequestAborted);
         try
         {
-            if (!registry.Attach(session, socket)) { socket.Abort(); return; }
-            await registry.SendAsync(session, socket, new { type = "session.ready", sessionId = session.Id, projectId = session.ProjectId, expiresAt = session.ExpiresAt }, context.RequestAborted);
+            if (!ReferenceEquals(registry.Authenticate(context), session))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+            // Serialize the check and upgrade with other attachments. Attach also
+            // enforces the invariant atomically for credentials paired earlier.
+            if (!registry.CanAttach(session))
+            {
+                context.Response.StatusCode = StatusCodes.Status409Conflict;
+                await context.Response.WriteAsJsonAsync(new { error = BridgeRegistry.SingleEditorMessage }, context.RequestAborted);
+                return;
+            }
+            acceptedSocket = await context.WebSockets.AcceptWebSocketAsync();
+            if (!registry.Attach(session, acceptedSocket)) { acceptedSocket.Abort(); acceptedSocket.Dispose(); return; }
+            await registry.SendAsync(session, acceptedSocket, new { type = "session.ready", sessionId = session.Id, projectId = session.ProjectId, expiresAt = session.ExpiresAt }, context.RequestAborted);
+        }
+        catch
+        {
+            if (acceptedSocket is not null)
+            {
+                acceptedSocket.Abort();
+                registry.Detach(session, acceptedSocket);
+                sources.DisconnectedSocket(session, acceptedSocket);
+                versionControl.DisconnectedSocket(session, acceptedSocket);
+                buildConfiguration.DisconnectedSocket(session, acceptedSocket);
+                acceptedSocket.Dispose();
+            }
+            throw;
         }
         finally { registry.CatalogGate.Release(); }
+        using var socket = acceptedSocket!;
         monitor.Wake();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         deadline.CancelAfter(session.ExpiresAt - DateTimeOffset.UtcNow);
